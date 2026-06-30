@@ -1,10 +1,10 @@
-package com.example.player
+package com.hastur.hmusic.player
 
 import android.content.Context
 import android.media.MediaPlayer
-import android.net.Uri
 import android.util.Log
-import com.example.data.SongEntity
+import com.hastur.hmusic.data.SongEntity
+import java.io.File
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -15,10 +15,18 @@ enum class LoopMode {
 }
 
 class MusicPlayerManager(private val context: Context) {
+    data class PlaybackSnapshot(
+        val song: SongEntity?,
+        val positionMs: Long,
+        val isPlaying: Boolean
+    )
+
     private var mediaPlayer: MediaPlayer? = null
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var progressJob: Job? = null
     private val tag = "MusicPlayerManager"
+    private var pendingSeekPositionMs: Long = 0L
+    private var pendingAutoPlay: Boolean = true
 
     // Exposed Playback States
     private val _currentSong = MutableStateFlow<SongEntity?>(null)
@@ -51,10 +59,22 @@ class MusicPlayerManager(private val context: Context) {
         mediaPlayer = MediaPlayer().apply {
             setOnPreparedListener { mp ->
                 _duration.value = mp.duration.toLong()
-                mp.start()
-                _isPlaying.value = true
+                val durationMs = mp.duration.toLong().coerceAtLeast(0L)
+                val safeSeekPosition = pendingSeekPositionMs
+                    .coerceAtLeast(0L)
+                    .coerceAtMost((durationMs - 1000L).coerceAtLeast(0L))
+                if (safeSeekPosition > 0L) {
+                    mp.seekTo(safeSeekPosition.toInt())
+                }
+                _currentPosition.value = safeSeekPosition
+                if (pendingAutoPlay) {
+                    mp.start()
+                    _isPlaying.value = true
+                    startProgressTracker()
+                } else {
+                    _isPlaying.value = false
+                }
                 _errorMessage.value = null
-                startProgressTracker()
             }
             setOnCompletionListener {
                 handlePlaybackCompleted()
@@ -95,11 +115,23 @@ class MusicPlayerManager(private val context: Context) {
     }
 
     fun playSong(song: SongEntity) {
+        loadSong(song, startPositionMs = 0L, autoPlay = true)
+        PlaybackService.ensureStarted(context)
+    }
+
+    fun restoreSong(song: SongEntity, startPositionMs: Long) {
+        loadSong(song, startPositionMs = startPositionMs, autoPlay = false)
+        PlaybackService.ensureStarted(context)
+    }
+
+    private fun loadSong(song: SongEntity, startPositionMs: Long, autoPlay: Boolean) {
         _currentSong.value = song
-        _currentPosition.value = 0L
+        _currentPosition.value = startPositionMs.coerceAtLeast(0L)
         _duration.value = 0L
         _isPlaying.value = false
         _errorMessage.value = null
+        pendingSeekPositionMs = startPositionMs
+        pendingAutoPlay = autoPlay
 
         try {
             if (mediaPlayer == null) {
@@ -109,19 +141,16 @@ class MusicPlayerManager(private val context: Context) {
             }
 
             mediaPlayer?.apply {
-                if (song.url.startsWith("http://") || song.url.startsWith("https://")) {
-                    setDataSource(song.url)
-                } else if (song.url.startsWith("content://")) {
-                    setDataSource(context, Uri.parse(song.url))
-                } else {
-                    // Try parsing as raw context url or use assets
-                    setDataSource(context, Uri.parse(song.url))
+                val localPath = song.localPath
+                if (!File(localPath).exists()) {
+                    throw IllegalStateException("Local file missing for ${song.md5sum}")
                 }
+                setDataSource(localPath)
                 prepareAsync()
             }
         } catch (e: Exception) {
             Log.e(tag, "Failed to play song: ${song.title}", e)
-            _errorMessage.value = "音轨资源加载失败 (格式或网络问题)"
+            _errorMessage.value = "当前歌曲未下载到本地，或本地文件不可用"
             _isPlaying.value = false
         }
     }
@@ -145,6 +174,7 @@ class MusicPlayerManager(private val context: Context) {
                 _isPlaying.value = true
                 startProgressTracker()
             }
+            PlaybackService.ensureStarted(context)
         } catch (e: Exception) {
             Log.e(tag, "Error triggering Play/Pause", e)
             _errorMessage.value = "播放控件响应失败"
@@ -166,7 +196,7 @@ class MusicPlayerManager(private val context: Context) {
         if (list.isEmpty()) return
         
         val current = currentSong.value
-        val currentIndex = list.indexOfFirst { it.url == current?.url }
+        val currentIndex = list.indexOfFirst { it.md5sum == current?.md5sum }
         val nextIndex = if (currentIndex != -1) {
             (currentIndex + 1) % list.size
         } else {
@@ -180,7 +210,7 @@ class MusicPlayerManager(private val context: Context) {
         if (list.isEmpty()) return
 
         val current = currentSong.value
-        val currentIndex = list.indexOfFirst { it.url == current?.url }
+        val currentIndex = list.indexOfFirst { it.md5sum == current?.md5sum }
         val prevIndex = if (currentIndex != -1) {
             if (currentIndex - 1 < 0) list.size - 1 else currentIndex - 1
         } else {
@@ -192,6 +222,10 @@ class MusicPlayerManager(private val context: Context) {
     fun toggleLoopMode() {
         _loopMode.value = if (_loopMode.value == LoopMode.LIST) LoopMode.SINGLE else LoopMode.LIST
         Log.d(tag, "Loop mode changed to ${_loopMode.value}")
+    }
+
+    fun setLoopMode(loopMode: LoopMode) {
+        _loopMode.value = loopMode
     }
 
     private fun handlePlaybackCompleted() {
@@ -233,5 +267,18 @@ class MusicPlayerManager(private val context: Context) {
     fun clear() {
         releasePlayer()
         scope.cancel()
+    }
+
+    fun snapshotPlayback(): PlaybackSnapshot {
+        val livePosition = try {
+            mediaPlayer?.currentPosition?.toLong() ?: _currentPosition.value
+        } catch (_: Exception) {
+            _currentPosition.value
+        }
+        return PlaybackSnapshot(
+            song = _currentSong.value,
+            positionMs = livePosition.coerceAtLeast(0L),
+            isPlaying = _isPlaying.value
+        )
     }
 }

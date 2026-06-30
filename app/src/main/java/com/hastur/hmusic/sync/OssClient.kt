@@ -1,4 +1,4 @@
-package com.example.sync
+package com.hastur.hmusic.sync
 
 import software.amazon.awssdk.auth.credentials.AnonymousCredentialsProvider
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials
@@ -15,6 +15,8 @@ import software.amazon.awssdk.services.s3.model.ListObjectsV2Request
 import software.amazon.awssdk.services.s3.model.NoSuchKeyException
 import software.amazon.awssdk.services.s3.model.PutObjectRequest
 import software.amazon.awssdk.services.s3.model.S3Exception
+import java.io.File
+import java.io.InputStream
 import java.net.URI
 import java.util.Locale
 
@@ -58,36 +60,8 @@ class OssClient(
     private val s3Client: S3Client
         get() = s3ClientDelegate.value
 
-    fun makeFileUrl(key: String): String {
-        val cleanKey = key.removePrefix("/")
-        val endpointUri = URI.create(normalizedEndpoint)
-        val authority = endpointUri.authority ?: normalizedEndpoint.removePrefix("https://").removePrefix("http://")
-        return if (forcePathStyle) {
-            "${endpointUri.scheme}://$authority/$bucket/$cleanKey"
-        } else {
-            "${endpointUri.scheme}://$bucket.$authority/$cleanKey"
-        }
-    }
-
-    suspend fun listMusicFiles(): List<String> {
-        val request = ListObjectsV2Request.builder()
-            .bucket(bucket)
-            .apply {
-                if (normalizedPrefix.isNotEmpty()) {
-                    prefix(normalizedPrefix)
-                }
-            }
-            .build()
-
-        return s3Client.listObjectsV2Paginator(request)
-            .contents()
-            .map { it.key() }
-            .filter(::isSupportedAudioFile)
-            .toList()
-    }
-
-    suspend fun uploadPlaylist(playlistJson: String): Boolean {
-        val key = playlistKey()
+    suspend fun uploadManifest(playlistJson: String): Boolean {
+        val key = manifestKey()
         val request = PutObjectRequest.builder()
             .bucket(bucket)
             .key(key)
@@ -98,10 +72,10 @@ class OssClient(
         return true
     }
 
-    suspend fun downloadPlaylist(): String? {
+    suspend fun downloadManifest(): String? {
         val request = GetObjectRequest.builder()
             .bucket(bucket)
-            .key(playlistKey())
+            .key(manifestKey())
             .build()
 
         val response: ResponseBytes<GetObjectResponse> = try {
@@ -118,24 +92,53 @@ class OssClient(
         return response.asUtf8String()
     }
 
+    suspend fun uploadSongFile(remoteKey: String, file: File, mimeType: String): String {
+        val request = PutObjectRequest.builder()
+            .bucket(bucket)
+            .key(remoteKey)
+            .contentType(mimeType.ifBlank { "application/octet-stream" })
+            .build()
+        s3Client.putObject(request, RequestBody.fromFile(file))
+        return remoteKey
+    }
+
+    suspend fun downloadSongStream(remoteKey: String): InputStream {
+        val request = GetObjectRequest.builder()
+            .bucket(bucket)
+            .key(remoteKey)
+            .build()
+        return s3Client.getObject(request)
+    }
+
     override fun close() {
         if (s3ClientDelegate.isInitialized()) {
             s3ClientDelegate.value.close()
         }
     }
 
-    private fun playlistKey(): String {
+    fun buildRemoteAudioKey(md5sum: String, fileName: String): String {
+        val extension = fileName.substringAfterLast('.', "")
+        val shardA = md5sum.take(2).ifBlank { "00" }
+        val shardB = md5sum.drop(2).take(2).ifBlank { "00" }
+        val suffix = if (extension.isBlank()) md5sum else "$md5sum.$extension"
+        return buildPrefixedKey("files/$shardA/$shardB/$suffix")
+    }
+
+    private fun manifestKey(): String {
+        return buildPrefixedKey(PLAYLIST_FILE_NAME)
+    }
+
+    private fun buildPrefixedKey(path: String): String {
         return if (normalizedPrefix.isEmpty()) {
-            PLAYLIST_FILE_NAME
+            path
         } else {
-            "$normalizedPrefix/$PLAYLIST_FILE_NAME"
+            "$normalizedPrefix/$path"
         }
     }
 
     companion object {
         private const val DEFAULT_REGION = "us-east-1"
         private const val PLAYLIST_FILE_NAME = "music_playlist_sync.json"
-        private val audioExtensions = setOf(".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".wma")
 
         fun defaultRegion(endpoint: String): String {
             val clean = endpoint.lowercase(Locale.ROOT)
@@ -189,11 +192,6 @@ class OssClient(
 
         private fun normalizePrefix(prefix: String): String {
             return prefix.trim().trim('/').removePrefix("/")
-        }
-
-        private fun isSupportedAudioFile(key: String): Boolean {
-            val lowerKey = key.lowercase(Locale.ROOT)
-            return audioExtensions.any(lowerKey::endsWith)
         }
     }
 }

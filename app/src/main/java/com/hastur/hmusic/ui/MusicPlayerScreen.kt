@@ -1,11 +1,14 @@
-package com.example.ui
+package com.hastur.hmusic.ui
 
+import android.graphics.BitmapFactory
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.BorderStroke
@@ -27,23 +30,29 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
-import com.example.data.OssConfigEntity
-import com.example.data.SongEntity
-import com.example.player.LoopMode
+import com.hastur.hmusic.data.OssConfigEntity
+import com.hastur.hmusic.player.LoopMode
 import java.util.Locale
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 @Composable
 fun MusicPlayerScreen(
@@ -150,7 +159,7 @@ fun MusicPlayerScreen(
             ) {
                 Column {
                     Text(
-                        text = "極簡音軌",
+                        text = "Music",
                         fontSize = 22.sp,
                         fontWeight = FontWeight.Bold,
                         color = textWhite,
@@ -167,7 +176,7 @@ fun MusicPlayerScreen(
                                 .background(accentNeonColor)
                         )
                         Text(
-                            text = "S3 CLOUD SYNCED",
+                            text = "LOCAL PLAYBACK",
                             fontSize = 10.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = accentNeonColor,
@@ -254,7 +263,7 @@ fun MusicPlayerScreen(
                             )
                             Spacer(modifier = Modifier.width(10.dp))
                             Text(
-                                text = "正在与云端 S3 / OSS 同步中...",
+                                text = "正在同步歌单或文件...",
                                 color = textWhite,
                                 fontSize = 13.sp
                             )
@@ -305,7 +314,7 @@ fun MusicPlayerScreen(
                         viewModel.saveOssConfig(endpoint, region, forcePathStyle, bucket, ak, sk, prefix)
                     },
                     onBackup = { viewModel.backupPlaylistToOSS() },
-                    onRestore = { viewModel.restorePlaylistFromCloud() },
+                    onSyncPlaylist = { viewModel.syncFromOSS() },
                     onSync = { viewModel.syncFromOSS() },
                     onClose = { showSettings = false },
                     onClearPlaylist = { viewModel.clearPlaylist() },
@@ -396,27 +405,15 @@ fun MusicPlayerScreen(
                                             drawCircle(color = Color(0x22FFFFFF), radius = size.width / 2.2f, style = Stroke(1.0f))
                                             drawCircle(color = Color(0x12909094), radius = size.width / 2.5f, style = Stroke(1.5f))
                                             drawCircle(color = Color(0x12FFFFFF), radius = size.width / 3.0f, style = Stroke(1.5f))
-                                            // Center hub
-                                            drawCircle(color = Color(0xFF2C2A33), radius = size.width / 4.2f)
-                                            // Dynamic Lavender Accent dot
-                                            drawCircle(color = Color(0xFFD0BCFF), radius = size.width / 12f)
                                         }
 
-                                        // Center core Icon overlay
-                                        Box(
-                                            modifier = Modifier
-                                                .size(38.dp)
-                                                .clip(CircleShape)
-                                                .background(Color.Black.copy(alpha = 0.35f)),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Filled.MusicNote,
-                                                contentDescription = "Spinning disk icon",
-                                                tint = Color(0xFFD0BCFF),
-                                                modifier = Modifier.size(18.dp)
-                                            )
-                                        }
+                                        ArtworkDisc(
+                                            filePath = currentSong?.localPath,
+                                            modifier = Modifier.size(110.dp),
+                                            accentColor = accentNeonColor,
+                                            placeholderIcon = Icons.Filled.MusicNote,
+                                            placeholderDescription = "Spinning disk icon"
+                                        )
                                     }
                                 }
                             }
@@ -440,7 +437,16 @@ fun MusicPlayerScreen(
                                 color = accentNeonColor,
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.Normal,
-                                textAlign = TextAlign.Center
+                                lineHeight = 18.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 24.dp),
+                                style = LocalTextStyle.current.copy(
+                                    platformStyle = PlatformTextStyle(includeFontPadding = true)
+                                )
                             )
                         }
                     }
@@ -487,7 +493,7 @@ fun MusicPlayerScreen(
 
                 // 4. Playlist catalog
                 Text(
-                    text = "共享播放列表 (${songs.size})",
+                    text = "播放列表 (${songs.size})",
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Bold,
                     color = textWhite,
@@ -506,7 +512,7 @@ fun MusicPlayerScreen(
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            text = "列表空，正在初始化默认歌曲音轨...",
+                            text = "还没有歌曲，导入本地音频或先同步云端歌单",
                             color = textDim,
                             fontSize = 13.sp,
                             textAlign = TextAlign.Center
@@ -520,12 +526,18 @@ fun MusicPlayerScreen(
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         items(songs) { song ->
-                            val isActive = currentSong?.url == song.url
+                            val isActive = currentSong?.md5sum == song.md5sum
                             SongItemRow(
                                 song = song,
                                 isActive = isActive,
                                 isPlayingResponse = isPlaying && isActive,
-                                onSelection = { viewModel.playSong(song) },
+                                onSelection = {
+                                    if (song.isDownloaded) {
+                                        viewModel.playSong(song)
+                                    } else {
+                                        viewModel.downloadSong(song)
+                                    }
+                                },
                                 onDelete = { viewModel.deleteSong(song) },
                                 cardBg = Color(0x09FFFFFF),
                                 activeBg = Color(0x24D0BCFF),
@@ -623,7 +635,7 @@ fun MusicPlayerScreen(
                             shape = RoundedCornerShape(12.dp),
                             modifier = Modifier.testTag("save_song_dialog_button")
                         ) {
-                            Text("添加并播放", fontWeight = FontWeight.Bold)
+                            Text("导入到本地", fontWeight = FontWeight.Bold)
                         }
                     }
                 }
@@ -634,7 +646,7 @@ fun MusicPlayerScreen(
 
 @Composable
 fun SongItemRow(
-    song: SongEntity,
+    song: LibrarySongItem,
     isActive: Boolean,
     isPlayingResponse: Boolean,
     onSelection: () -> Unit,
@@ -645,6 +657,18 @@ fun SongItemRow(
     textWhite: Color,
     textDim: Color
 ) {
+    val actionIcon = when {
+        isPlayingResponse -> Icons.Filled.Equalizer
+        song.isDownloaded -> Icons.Filled.Audiotrack
+        song.canDownload -> Icons.Filled.CloudDownload
+        else -> Icons.Filled.Warning
+    }
+    val availabilityLabel = when (song.status) {
+        LibrarySongStatus.LOCAL_ONLY -> "仅本地"
+        LibrarySongStatus.REMOTE_ONLY -> "未下载"
+        LibrarySongStatus.BACKED_UP -> "已备份"
+    }
+
     Surface(
         modifier = Modifier
             .fillMaxWidth()
@@ -669,30 +693,16 @@ fun SongItemRow(
                 .padding(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Icon layout based on source provider
-            Box(
+            ArtworkThumbnail(
+                filePath = song.localSong?.localPath,
                 modifier = Modifier
                     .size(40.dp)
                     .clip(RoundedCornerShape(8.dp))
                     .background(if (isActive) accentColor.copy(alpha = 0.15f) else Color.White.copy(alpha = 0.05f)),
-                contentAlignment = Alignment.Center
-            ) {
-                if (isPlayingResponse) {
-                    Icon(
-                        imageVector = Icons.Filled.VolumeUp,
-                        contentDescription = "Playing index wave",
-                        tint = accentColor,
-                        modifier = Modifier.size(20.dp)
-                    )
-                } else {
-                    Icon(
-                        imageVector = if (song.isLocal) Icons.Filled.Audiotrack else Icons.Filled.CloudQueue,
-                        contentDescription = "Source icon",
-                        tint = if (isActive) accentColor else textDim,
-                        modifier = Modifier.size(18.dp)
-                    )
-                }
-            }
+                placeholderIcon = actionIcon,
+                placeholderTint = if (isPlayingResponse || isActive) accentColor else textDim,
+                placeholderDescription = if (isPlayingResponse) "Playing index wave" else "Source icon"
+            )
 
             Spacer(modifier = Modifier.width(12.dp))
 
@@ -713,18 +723,22 @@ fun SongItemRow(
                         text = song.artist,
                         color = textDim,
                         fontSize = 12.sp,
+                        lineHeight = 16.sp,
                         maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                        overflow = TextOverflow.Ellipsis,
+                        style = LocalTextStyle.current.copy(
+                            platformStyle = PlatformTextStyle(includeFontPadding = true)
+                        )
                     )
                     Text(
-                        text = if (song.isLocal) "本地" else "云端 S3/OSS",
-                        color = if (song.isLocal) Color(0xFFEADDFF).copy(alpha = 0.8f) else accentColor.copy(alpha = 0.8f),
+                        text = availabilityLabel,
+                        color = if (song.isDownloaded) Color(0xFFEADDFF).copy(alpha = 0.8f) else accentColor.copy(alpha = 0.8f),
                         fontSize = 9.sp,
                         fontWeight = FontWeight.Bold,
                         fontFamily = FontFamily.Monospace,
                         modifier = Modifier
                             .background(
-                                color = (if (song.isLocal) Color(0xFFEADDFF) else accentColor).copy(alpha = 0.08f),
+                                color = (if (song.isDownloaded) Color(0xFFEADDFF) else accentColor).copy(alpha = 0.08f),
                                 shape = RoundedCornerShape(4.dp)
                             )
                             .padding(horizontal = 4.dp, vertical = 2.dp)
@@ -744,20 +758,133 @@ fun SongItemRow(
                 )
             } else {
                 Spacer(modifier = Modifier.width(8.dp))
-                IconButton(
-                    onClick = { onDelete() },
-                    modifier = Modifier.size(24.dp)
-                ) {
+                if (song.canDownload) {
                     Icon(
-                        imageVector = Icons.Filled.Delete,
-                        contentDescription = "Remove track",
-                        tint = textDim.copy(alpha = 0.6f),
-                        modifier = Modifier.size(16.dp)
+                        imageVector = Icons.Filled.CloudDownload,
+                        contentDescription = "Download track",
+                        tint = accentColor,
+                        modifier = Modifier.size(20.dp)
                     )
+                } else {
+                    IconButton(
+                        onClick = { onDelete() },
+                        modifier = Modifier.size(24.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Delete,
+                            contentDescription = "Remove track",
+                            tint = textDim.copy(alpha = 0.6f),
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
                 }
             }
         }
     }
+}
+
+@Composable
+private fun ArtworkDisc(
+    filePath: String?,
+    modifier: Modifier,
+    accentColor: Color,
+    placeholderIcon: ImageVector,
+    placeholderDescription: String
+) {
+    val artwork = rememberEmbeddedArtwork(filePath)
+
+    Box(
+        modifier = modifier,
+        contentAlignment = Alignment.Center
+    ) {
+        if (artwork != null) {
+            Image(
+                bitmap = artwork,
+                contentDescription = "Album artwork",
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(CircleShape)
+            )
+            Box(
+                modifier = Modifier
+                    .size(20.dp)
+                    .clip(CircleShape)
+                    .background(Color.Black.copy(alpha = 0.55f))
+                    .border(1.dp, Color.White.copy(alpha = 0.12f), CircleShape)
+            )
+        } else {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(CircleShape)
+                    .background(Color(0xFF2C2A33)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = placeholderIcon,
+                    contentDescription = placeholderDescription,
+                    tint = accentColor,
+                    modifier = Modifier.size(42.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ArtworkThumbnail(
+    filePath: String?,
+    modifier: Modifier,
+    placeholderIcon: ImageVector,
+    placeholderTint: Color,
+    placeholderDescription: String
+) {
+    val artwork = rememberEmbeddedArtwork(filePath)
+
+    Box(
+        modifier = modifier,
+        contentAlignment = Alignment.Center
+    ) {
+        if (artwork != null) {
+            Image(
+                bitmap = artwork,
+                contentDescription = "Song artwork",
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+        } else {
+            Icon(
+                imageVector = placeholderIcon,
+                contentDescription = placeholderDescription,
+                tint = placeholderTint,
+                modifier = Modifier.size(18.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun rememberEmbeddedArtwork(filePath: String?): ImageBitmap? {
+    val resolvedPath = filePath?.takeIf { it.isNotBlank() }
+    return produceState<ImageBitmap?>(initialValue = null, key1 = resolvedPath) {
+        value = if (resolvedPath == null) {
+            null
+        } else {
+            withContext(Dispatchers.IO) {
+                runCatching {
+                    val retriever = MediaMetadataRetriever()
+                    try {
+                        retriever.setDataSource(resolvedPath)
+                        val bytes = retriever.embeddedPicture ?: return@runCatching null
+                        BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+                    } finally {
+                        retriever.release()
+                    }
+                }.getOrNull()
+            }
+        }
+    }.value
 }
 
 @Composable
@@ -949,7 +1076,7 @@ fun OssSettingsCard(
     syncState: SyncState,
     onSave: (String, String, Boolean, String, String, String, String) -> Unit,
     onBackup: () -> Unit,
-    onRestore: () -> Unit,
+    onSyncPlaylist: () -> Unit,
     onSync: () -> Unit,
     onClose: () -> Unit,
     onClearPlaylist: () -> Unit,
@@ -996,7 +1123,7 @@ fun OssSettingsCard(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "S3 / 七牛云 / OSS 账号同步配置",
+                        text = "云端备份配置",
                         fontSize = 15.sp,
                         fontWeight = FontWeight.Bold,
                         color = textWhite
@@ -1153,7 +1280,7 @@ fun OssSettingsCard(
             OutlinedTextField(
                 value = prefix,
                 onValueChange = { prefix = it },
-                label = { Text("扫描路径前缀 (如 music/)") },
+                label = { Text("备份路径前缀 (如 music/)") },
                 placeholder = { Text("music/") },
                 singleLine = true,
                 colors = OutlinedTextFieldDefaults.colors(
@@ -1181,7 +1308,7 @@ fun OssSettingsCard(
             ) {
                 Icon(imageVector = Icons.Filled.Save, contentDescription = "Save settings", modifier = Modifier.size(16.dp))
                 Spacer(modifier = Modifier.width(6.dp))
-                Text("保存连接并同步云端目录", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                Text("保存连接", fontWeight = FontWeight.Bold, fontSize = 13.sp)
             }
 
             Spacer(modifier = Modifier.height(12.dp))
@@ -1201,22 +1328,35 @@ fun OssSettingsCard(
                 ) {
                     Icon(imageVector = Icons.Filled.CloudUpload, contentDescription = "Backup", modifier = Modifier.size(14.dp))
                     Spacer(modifier = Modifier.width(4.dp))
-                    Text("整单云备份", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Text("备份到云端", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 }
 
                 Button(
-                    onClick = onRestore,
+                    onClick = onSyncPlaylist,
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0x14FFFFFF), contentColor = textWhite),
                     border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x1AFFFFFF)),
                     modifier = Modifier
                         .weight(1f)
-                        .testTag("cloud_restore_button"),
+                        .testTag("cloud_sync_playlist_button"),
                     shape = RoundedCornerShape(12.dp)
                 ) {
                     Icon(imageVector = Icons.Filled.CloudDownload, contentDescription = "Restore", modifier = Modifier.size(14.dp))
                     Spacer(modifier = Modifier.width(4.dp))
-                    Text("整单云还原", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Text("同步歌单", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            OutlinedButton(
+                onClick = onSync,
+                modifier = Modifier.fillMaxWidth(),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x1AFFFFFF)),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = textWhite)
+            ) {
+                Icon(imageVector = Icons.Filled.Sync, contentDescription = "Sync manifest", modifier = Modifier.size(14.dp))
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("只同步云端歌单清单", fontSize = 11.sp, fontWeight = FontWeight.Bold)
             }
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -1232,7 +1372,7 @@ fun OssSettingsCard(
                     modifier = Modifier.size(16.dp)
                 )
                 Spacer(modifier = Modifier.width(4.dp))
-                Text("清空列表并初始化默认音轨", color = Color(0xFFFF5252).copy(alpha = 0.8f), fontSize = 11.sp)
+                Text("清空本地列表", color = Color(0xFFFF5252).copy(alpha = 0.8f), fontSize = 11.sp)
             }
         }
     }
