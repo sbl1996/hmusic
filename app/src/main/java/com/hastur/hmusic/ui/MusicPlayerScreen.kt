@@ -1,8 +1,10 @@
 package com.hastur.hmusic.ui
 
+import android.content.ClipboardManager
 import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
 import android.net.Uri
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
@@ -14,11 +16,13 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
@@ -45,10 +49,11 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
-import com.hastur.hmusic.data.OssConfigEntity
+import com.hastur.hmusic.data.BackupProfileEntity
 import com.hastur.hmusic.player.LoopMode
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
@@ -60,8 +65,10 @@ fun MusicPlayerScreen(
     modifier: Modifier = Modifier
 ) {
     val songs by viewModel.allSongs.collectAsState()
-    val ossConfig by viewModel.ossConfig.collectAsState()
+    val backupProfiles by viewModel.backupProfiles.collectAsState()
+    val activeProfile by viewModel.activeProfile.collectAsState()
     val syncState by viewModel.syncState.collectAsState()
+    val downloadStates by viewModel.downloadStates.collectAsState()
 
     val currentSong by viewModel.currentSong.collectAsState()
     val isPlaying by viewModel.isPlaying.collectAsState()
@@ -197,8 +204,8 @@ fun MusicPlayerScreen(
                             .border(1.dp, Color(0x1AFFFFFF), CircleShape)
                     ) {
                         Icon(
-                            imageVector = Icons.Filled.Cloud,
-                            contentDescription = "OSS Settings",
+                            imageVector = if (showSettings) Icons.Filled.Close else Icons.Filled.Cloud,
+                            contentDescription = if (showSettings) "Close settings" else "OSS Settings",
                             tint = if (showSettings) accentNeonColor else textWhite
                         )
                     }
@@ -223,117 +230,38 @@ fun MusicPlayerScreen(
                 }
             }
 
-            // Sync notifications bar
-            AnimatedVisibility(
-                visible = syncState != SyncState.Idle,
-                enter = fadeIn() + expandVertically(),
-                exit = fadeOut() + shrinkVertically()
-            ) {
-                Surface(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 12.dp),
-                    shape = RoundedCornerShape(16.dp),
-                    color = when (syncState) {
-                        is SyncState.Loading -> Color(0x1AD0BCFF)
-                        is SyncState.Completed -> Color(0x1AB3FFD6)
-                        else -> Color(0x1AFF5252)
-                    },
-                    border = CardDefaults.outlinedCardBorder(enabled = true).copy(
-                        brush = Brush.linearGradient(
-                            listOf(
-                                when (syncState) {
-                                    is SyncState.Loading -> accentNeonColor
-                                    is SyncState.Completed -> Color(0xFFB3FFD6)
-                                    else -> Color(0xFFFF5252)
-                                }, Color.Transparent
-                            )
-                        )
-                    )
-                ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        if (syncState is SyncState.Loading) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(16.dp),
-                                strokeWidth = 2.dp,
-                                color = accentNeonColor
-                            )
-                            Spacer(modifier = Modifier.width(10.dp))
-                            Text(
-                                text = "正在同步歌单或文件...",
-                                color = textWhite,
-                                fontSize = 13.sp
-                            )
-                        } else {
-                            Icon(
-                                imageVector = if (syncState is SyncState.Completed) Icons.Filled.CheckCircle else Icons.Filled.Warning,
-                                contentDescription = "Status",
-                                tint = if (syncState is SyncState.Completed) Color(0xFFB3FFD6) else Color(0xFFFF5252),
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = when (val s = syncState) {
-                                    is SyncState.Completed -> s.message
-                                    is SyncState.Error -> s.message
-                                    else -> ""
-                                },
-                                color = textWhite,
-                                fontSize = 13.sp,
-                                modifier = Modifier.weight(1f)
-                            )
-                            IconButton(
-                                onClick = { viewModel.resetSyncState() },
-                                modifier = Modifier.size(24.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Filled.Close,
-                                    contentDescription = "Dismiss",
-                                    tint = textDim,
-                                    modifier = Modifier.size(14.dp)
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Expanded Settings layout
-            AnimatedVisibility(
-                visible = showSettings,
-                enter = slideInVertically() + fadeIn(),
-                exit = slideOutVertically() + shrinkVertically()
-            ) {
-                OssSettingsCard(
-                    config = ossConfig,
+            if (showSettings) {
+                BackupSettingsPage(
+                    profiles = backupProfiles,
+                    activeProfile = activeProfile,
                     syncState = syncState,
-                    onSave = { endpoint, region, forcePathStyle, bucket, ak, sk, prefix ->
-                        viewModel.saveOssConfig(endpoint, region, forcePathStyle, bucket, ak, sk, prefix)
+                    onSave = { name, endpoint, region, forcePathStyle, bucket, ak, sk, prefix ->
+                        viewModel.saveActiveProfile(name, endpoint, region, forcePathStyle, bucket, ak, sk, prefix)
                     },
+                    onCreateProfile = { copyCurrent -> viewModel.createProfile(copyCurrent) },
+                    onSwitchProfile = { profileId -> viewModel.switchProfile(profileId) },
+                    onDeleteProfile = { viewModel.deleteActiveProfile() },
                     onBackup = { viewModel.backupPlaylistToOSS() },
                     onSyncPlaylist = { viewModel.syncFromOSS() },
                     onSync = { viewModel.syncFromOSS() },
-                    onClose = { showSettings = false },
                     onClearPlaylist = { viewModel.clearPlaylist() },
-                    cardBackground = cardBackground,
+                    onDismissSyncState = viewModel::resetSyncState,
+                    onShowSyncCompleted = viewModel::showSyncCompleted,
+                    onShowSyncError = viewModel::showSyncError,
                     accentColor = accentNeonColor,
                     textWhite = textWhite,
-                    textDim = textDim
+                    textDim = textDim,
+                    modifier = Modifier.weight(1f)
                 )
-            }
-
-            // Playlist + Player layout
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-            ) {
+            } else {
+                // Playlist + Player layout
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                ) {
                 // Turntable cover
-                if (!showSettings) {
-                    Box(
+                    BoxWithConstraints(
                         modifier = Modifier
                             .fillMaxWidth()
                             .weight(1.2f)
@@ -341,19 +269,25 @@ fun MusicPlayerScreen(
                         contentAlignment = Alignment.Center
                     ) {
                         val currentSongName = currentSong?.title ?: "无正在播放的歌曲"
+                        val artworkFrameSize = minOf(maxWidth * 0.62f, maxHeight * 0.68f, 240.dp)
+                        val backgroundGlowSize = artworkFrameSize * 0.83f
+                        val glassCardSize = artworkFrameSize * 0.825f
+                        val vinylSize = artworkFrameSize * 0.71f
+                        val artworkSize = artworkFrameSize * 0.46f
 
                         Column(
+                            modifier = Modifier.fillMaxSize(),
                             horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.Center
+                            verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterVertically)
                         ) {
                             Box(
-                                modifier = Modifier.size(240.dp),
+                                modifier = Modifier.size(artworkFrameSize),
                                 contentAlignment = Alignment.Center
                             ) {
                                 // Background ambient glow
                                 Box(
                                     modifier = Modifier
-                                        .size(200.dp)
+                                        .size(backgroundGlowSize)
                                         .rotate(6f)
                                         .background(
                                             Brush.linearGradient(
@@ -368,7 +302,7 @@ fun MusicPlayerScreen(
                                 // Frosted Glass container overlay
                                 Box(
                                     modifier = Modifier
-                                        .size(198.dp)
+                                        .size(glassCardSize)
                                         .background(
                                             color = Color(0x3D000000),
                                             shape = RoundedCornerShape(24.dp)
@@ -393,7 +327,7 @@ fun MusicPlayerScreen(
                                     // Beautiful inner vinyl disk that spins
                                     Box(
                                         modifier = Modifier
-                                            .size(170.dp * breathingScale)
+                                            .size(vinylSize * breathingScale)
                                             .rotate(if (isPlaying) spinningAngle else 0f),
                                         contentAlignment = Alignment.Center
                                     ) {
@@ -409,7 +343,7 @@ fun MusicPlayerScreen(
 
                                         ArtworkDisc(
                                             filePath = currentSong?.localPath,
-                                            modifier = Modifier.size(110.dp),
+                                            modifier = Modifier.size(artworkSize),
                                             accentColor = accentNeonColor,
                                             placeholderIcon = Icons.Filled.MusicNote,
                                             placeholderDescription = "Spinning disk icon"
@@ -417,8 +351,6 @@ fun MusicPlayerScreen(
                                     }
                                 }
                             }
-
-                            Spacer(modifier = Modifier.height(16.dp))
 
                             // Custom labels
                             Text(
@@ -431,7 +363,6 @@ fun MusicPlayerScreen(
                                 textAlign = TextAlign.Center,
                                 modifier = Modifier.padding(horizontal = 24.dp)
                             )
-                            Spacer(modifier = Modifier.height(2.dp))
                             Text(
                                 text = currentSong?.artist ?: "请从下方列表挑选音轨",
                                 color = accentNeonColor,
@@ -445,13 +376,11 @@ fun MusicPlayerScreen(
                                     .fillMaxWidth()
                                     .padding(horizontal = 24.dp),
                                 style = LocalTextStyle.current.copy(
-                                    platformStyle = PlatformTextStyle(includeFontPadding = true)
+                                    platformStyle = PlatformTextStyle(includeFontPadding = false)
                                 )
                             )
                         }
                     }
-                }
-
                 // Error message if any
                 playerError?.let { err ->
                     Text(
@@ -527,12 +456,16 @@ fun MusicPlayerScreen(
                     ) {
                         items(songs) { song ->
                             val isActive = currentSong?.md5sum == song.md5sum
+                            val downloadState = downloadStates[song.md5sum] ?: SongDownloadState.Idle
                             SongItemRow(
                                 song = song,
                                 isActive = isActive,
                                 isPlayingResponse = isPlaying && isActive,
+                                downloadState = downloadState,
                                 onSelection = {
-                                    if (song.isDownloaded) {
+                                    if (downloadState is SongDownloadState.Downloading) {
+                                        Unit
+                                    } else if (song.isDownloaded) {
                                         viewModel.playSong(song)
                                     } else {
                                         viewModel.downloadSong(song)
@@ -549,6 +482,7 @@ fun MusicPlayerScreen(
                     }
                 }
                 Spacer(modifier = Modifier.height(8.dp))
+            }
             }
         }
     }
@@ -641,6 +575,100 @@ fun MusicPlayerScreen(
                 }
             }
         }
+
+        if (!showSettings && syncState != SyncState.Idle) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(top = 72.dp, start = 16.dp, end = 16.dp)
+                    .zIndex(1f),
+                contentAlignment = Alignment.TopCenter
+            ) {
+                SyncStatusBanner(
+                    syncState = syncState,
+                    accentColor = accentNeonColor,
+                    textWhite = textWhite,
+                    textDim = textDim,
+                    onDismiss = viewModel::resetSyncState
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun BackupSettingsPage(
+    profiles: List<BackupProfileEntity>,
+    activeProfile: BackupProfileEntity?,
+    syncState: SyncState,
+    onSave: (String, String, String, Boolean, String, String, String, String) -> Unit,
+    onCreateProfile: (Boolean) -> Unit,
+    onSwitchProfile: (Long) -> Unit,
+    onDeleteProfile: () -> Unit,
+    onBackup: () -> Unit,
+    onSyncPlaylist: () -> Unit,
+    onSync: () -> Unit,
+    onClearPlaylist: () -> Unit,
+    onDismissSyncState: () -> Unit,
+    onShowSyncCompleted: (String) -> Unit,
+    onShowSyncError: (String) -> Unit,
+    accentColor: Color,
+    textWhite: Color,
+    textDim: Color,
+    modifier: Modifier = Modifier
+) {
+    val scrollState = rememberScrollState()
+
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(scrollState),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            OssSettingsCard(
+                profiles = profiles,
+                activeProfile = activeProfile,
+                onSave = onSave,
+                onCreateProfile = onCreateProfile,
+                onSwitchProfile = onSwitchProfile,
+                onDeleteProfile = onDeleteProfile,
+                onBackup = onBackup,
+                onSyncPlaylist = onSyncPlaylist,
+                onSync = onSync,
+                onClearPlaylist = onClearPlaylist,
+                onShowSyncCompleted = onShowSyncCompleted,
+                onShowSyncError = onShowSyncError,
+                cardBackground = Color(0x13FFFFFF),
+                accentColor = accentColor,
+                textWhite = textWhite,
+                textDim = textDim
+            )
+
+            Spacer(modifier = Modifier.height(24.dp))
+        }
+
+        if (syncState != SyncState.Idle) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 16.dp)
+                    .zIndex(1f),
+                contentAlignment = Alignment.TopCenter
+            ) {
+                SyncStatusBanner(
+                    syncState = syncState,
+                    accentColor = accentColor,
+                    textWhite = textWhite,
+                    textDim = textDim,
+                    onDismiss = onDismissSyncState,
+                    modifier = Modifier.padding(top = 8.dp)
+                )
+            }
+        }
     }
 }
 
@@ -649,6 +677,7 @@ fun SongItemRow(
     song: LibrarySongItem,
     isActive: Boolean,
     isPlayingResponse: Boolean,
+    downloadState: SongDownloadState,
     onSelection: () -> Unit,
     onDelete: () -> Unit,
     cardBg: Color,
@@ -657,6 +686,7 @@ fun SongItemRow(
     textWhite: Color,
     textDim: Color
 ) {
+    val isDownloading = downloadState is SongDownloadState.Downloading
     val actionIcon = when {
         isPlayingResponse -> Icons.Filled.Equalizer
         song.isDownloaded -> Icons.Filled.Audiotrack
@@ -672,7 +702,7 @@ fun SongItemRow(
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { onSelection() }
+            .clickable(enabled = !isDownloading) { onSelection() }
             .testTag("song_item_${song.title}"),
         shape = RoundedCornerShape(16.dp),
         color = if (isActive) Color(0x24D0BCFF) else Color(0x09FFFFFF),
@@ -758,12 +788,12 @@ fun SongItemRow(
                 )
             } else {
                 Spacer(modifier = Modifier.width(8.dp))
-                if (song.canDownload) {
-                    Icon(
-                        imageVector = Icons.Filled.CloudDownload,
-                        contentDescription = "Download track",
-                        tint = accentColor,
-                        modifier = Modifier.size(20.dp)
+                if (isDownloading || downloadState is SongDownloadState.Failed || song.canDownload) {
+                    DownloadActionIndicator(
+                        state = downloadState,
+                        accentColor = accentColor,
+                        errorColor = Color(0xFFFF6B6B),
+                        modifier = Modifier.size(24.dp)
                     )
                 } else {
                     IconButton(
@@ -778,6 +808,59 @@ fun SongItemRow(
                         )
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DownloadActionIndicator(
+    state: SongDownloadState,
+    accentColor: Color,
+    errorColor: Color,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier,
+        contentAlignment = Alignment.Center
+    ) {
+        when (state) {
+            is SongDownloadState.Downloading -> {
+                val progress = state.progress?.coerceIn(0f, 1f)
+                if (progress != null) {
+                    CircularProgressIndicator(
+                        progress = { progress },
+                        modifier = Modifier.fillMaxSize(),
+                        color = accentColor,
+                        strokeWidth = 2.dp,
+                        trackColor = accentColor.copy(alpha = 0.18f)
+                    )
+                } else {
+                    CircularProgressIndicator(
+                        modifier = Modifier.fillMaxSize(),
+                        color = accentColor,
+                        strokeWidth = 2.dp,
+                        trackColor = accentColor.copy(alpha = 0.18f)
+                    )
+                }
+            }
+
+            is SongDownloadState.Failed -> {
+                Icon(
+                    imageVector = Icons.Filled.Warning,
+                    contentDescription = "Download failed",
+                    tint = errorColor,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+
+            SongDownloadState.Idle -> {
+                Icon(
+                    imageVector = Icons.Filled.CloudDownload,
+                    contentDescription = "Download track",
+                    tint = accentColor,
+                    modifier = Modifier.size(20.dp)
+                )
             }
         }
     }
@@ -1072,74 +1155,149 @@ fun PlaybackControlsRow(
 
 @Composable
 fun OssSettingsCard(
-    config: OssConfigEntity?,
-    syncState: SyncState,
-    onSave: (String, String, Boolean, String, String, String, String) -> Unit,
+    profiles: List<BackupProfileEntity>,
+    activeProfile: BackupProfileEntity?,
+    onSave: (String, String, String, Boolean, String, String, String, String) -> Unit,
+    onCreateProfile: (Boolean) -> Unit,
+    onSwitchProfile: (Long) -> Unit,
+    onDeleteProfile: () -> Unit,
     onBackup: () -> Unit,
     onSyncPlaylist: () -> Unit,
     onSync: () -> Unit,
-    onClose: () -> Unit,
     onClearPlaylist: () -> Unit,
+    onShowSyncCompleted: (String) -> Unit,
+    onShowSyncError: (String) -> Unit,
     cardBackground: Color,
     accentColor: Color,
     textWhite: Color,
     textDim: Color
 ) {
-    var endpoint by remember(config) { mutableStateOf(config?.endpoint ?: "") }
-    var region by remember(config) { mutableStateOf(config?.region ?: "") }
-    var forcePathStyle by remember(config) { mutableStateOf(config?.forcePathStyle ?: false) }
-    var bucket by remember(config) { mutableStateOf(config?.bucket ?: "") }
-    var ak by remember(config) { mutableStateOf(config?.accessKeyId ?: "") }
-    var sk by remember(config) { mutableStateOf(config?.accessKeySecret ?: "") }
-    var prefix by remember(config) { mutableStateOf(config?.prefix ?: "") }
+    val context = LocalContext.current
+    var profileMenuExpanded by remember { mutableStateOf(false) }
+    var profileName by remember(activeProfile) { mutableStateOf(activeProfile?.name ?: "") }
+    var endpoint by remember(activeProfile) { mutableStateOf(activeProfile?.endpoint ?: "") }
+    var region by remember(activeProfile) { mutableStateOf(activeProfile?.region ?: "") }
+    var forcePathStyle by remember(activeProfile) { mutableStateOf(activeProfile?.forcePathStyle ?: false) }
+    var bucket by remember(activeProfile) { mutableStateOf(activeProfile?.bucket ?: "") }
+    var ak by remember(activeProfile) { mutableStateOf(activeProfile?.accessKeyId ?: "") }
+    var sk by remember(activeProfile) { mutableStateOf(activeProfile?.accessKeySecret ?: "") }
+    var prefix by remember(activeProfile) { mutableStateOf(activeProfile?.prefix ?: "") }
     var skVisible by remember { mutableStateOf(false) }
 
-    Card(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(bottom = 16.dp),
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = Color(0x17FFFFFF)),
-        border = androidx.compose.foundation.BorderStroke(
-            1.dp,
-            Brush.verticalGradient(
-                colors = listOf(Color(0x33FFFFFF), Color(0x0AFFFFFF))
-            )
-        )
+            .padding(bottom = 16.dp)
     ) {
         Column(
-            modifier = Modifier.padding(16.dp)
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 4.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Filled.Storage,
-                        contentDescription = "OSS Settings Icon",
-                        tint = accentColor
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "云端备份配置",
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = textWhite
-                    )
-                }
+                Box(modifier = Modifier.weight(1f)) {
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { profileMenuExpanded = true },
+                        shape = RoundedCornerShape(16.dp),
+                        color = Color(0x10FFFFFF),
+                        border = BorderStroke(1.dp, Color(0x1AFFFFFF))
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.FolderOpen,
+                                contentDescription = "Select profile",
+                                tint = accentColor,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = activeProfile?.name ?: "选择配置",
+                                    color = textWhite,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Icon(
+                                imageVector = Icons.Filled.ArrowDropDown,
+                                contentDescription = "Expand profiles",
+                                tint = textDim
+                            )
+                        }
+                    }
 
-                IconButton(onClick = onClose, modifier = Modifier.size(24.dp)) {
+                    DropdownMenu(
+                        expanded = profileMenuExpanded,
+                        onDismissRequest = { profileMenuExpanded = false },
+                        modifier = Modifier.fillMaxWidth(0.92f)
+                    ) {
+                        profiles.forEach { profile ->
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        text = if (profile.isActive) "${profile.name} · 当前" else profile.name,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                },
+                                onClick = {
+                                    profileMenuExpanded = false
+                                    onSwitchProfile(profile.id)
+                                }
+                            )
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+
+                IconButton(
+                    onClick = { onCreateProfile(false) },
+                    modifier = Modifier
+                        .size(42.dp)
+                        .clip(CircleShape)
+                        .background(Color(0x13FFFFFF))
+                        .border(1.dp, Color(0x1AFFFFFF), CircleShape)
+                ) {
                     Icon(
-                        imageVector = Icons.Filled.Close,
-                        contentDescription = "Close config",
-                        tint = textDim
+                        imageVector = Icons.Filled.AddCircle,
+                        contentDescription = "Create profile",
+                        tint = accentColor
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(8.dp))
+
+            OutlinedTextField(
+                value = profileName,
+                onValueChange = { profileName = it },
+                label = { Text("配置名称") },
+                singleLine = true,
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedTextColor = textWhite,
+                    unfocusedTextColor = textWhite,
+                    focusedBorderColor = accentColor,
+                    unfocusedBorderColor = Color(0x1EFFFFFF),
+                    focusedLabelColor = accentColor,
+                    unfocusedLabelColor = textDim
+                ),
+                modifier = Modifier.fillMaxWidth().testTag("oss_profile_name_input")
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
 
             OutlinedTextField(
                 value = endpoint,
@@ -1198,11 +1356,6 @@ fun OssSettingsCard(
                         text = "强制 Path-Style",
                         color = textWhite,
                         fontWeight = FontWeight.SemiBold
-                    )
-                    Text(
-                        text = "七牛、MinIO、本地 IP/端口 常需要开启；阿里云 OSS 通常保持关闭",
-                        color = textDim,
-                        fontSize = 12.sp
                     )
                 }
                 Switch(
@@ -1296,22 +1449,64 @@ fun OssSettingsCard(
                 modifier = Modifier.fillMaxWidth().testTag("oss_prefix_input")
             )
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
-            Button(
-                onClick = { onSave(endpoint, region, forcePathStyle, bucket, ak, sk, prefix) },
-                colors = ButtonDefaults.buttonColors(containerColor = accentColor, contentColor = Color(0xFF21005D)),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("save_settings_button"),
-                shape = RoundedCornerShape(12.dp)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Icon(imageVector = Icons.Filled.Save, contentDescription = "Save settings", modifier = Modifier.size(16.dp))
-                Spacer(modifier = Modifier.width(6.dp))
-                Text("保存连接", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                Button(
+                    onClick = { onSave(profileName, endpoint, region, forcePathStyle, bucket, ak, sk, prefix) },
+                    colors = ButtonDefaults.buttonColors(containerColor = accentColor, contentColor = Color(0xFF21005D)),
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("save_settings_button"),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(imageVector = Icons.Filled.Save, contentDescription = "Save settings", modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("保存配置", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                }
+
+                Button(
+                    onClick = {
+                        val clipboard = context.getSystemService(ClipboardManager::class.java)
+                        val rawText = clipboard?.primaryClip
+                            ?.takeIf { it.itemCount > 0 }
+                            ?.getItemAt(0)
+                            ?.coerceToText(context)
+                            ?.toString()
+                            .orEmpty()
+                        val parsed = parseEnvClipboardConfig(rawText)
+                        if (parsed == null) {
+                            onShowSyncError("剪贴板里没有可解析的 S3 配置")
+                            Toast.makeText(context, "剪贴板里没有可解析的 S3 配置", Toast.LENGTH_SHORT).show()
+                        } else {
+                            endpoint = parsed.endpoint ?: endpoint
+                            region = parsed.region ?: region
+                            forcePathStyle = parsed.forcePathStyle ?: forcePathStyle
+                            bucket = parsed.bucket ?: bucket
+                            ak = parsed.accessKeyId ?: ak
+                            sk = parsed.accessKeySecret ?: sk
+                            prefix = parsed.prefix ?: prefix
+                            if (profileName.isBlank()) {
+                                profileName = buildSuggestedProfileName(parsed)
+                            }
+                            onShowSyncCompleted("已从剪贴板填充配置")
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0x14FFFFFF), contentColor = textWhite),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x1AFFFFFF)),
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(imageVector = Icons.Filled.ContentPaste, contentDescription = "Paste config", modifier = Modifier.size(14.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("粘贴配置", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -1340,39 +1535,147 @@ fun OssSettingsCard(
                         .testTag("cloud_sync_playlist_button"),
                     shape = RoundedCornerShape(12.dp)
                 ) {
-                    Icon(imageVector = Icons.Filled.CloudDownload, contentDescription = "Restore", modifier = Modifier.size(14.dp))
+                    Icon(imageVector = Icons.Filled.CloudDownload, contentDescription = "Full sync", modifier = Modifier.size(14.dp))
                     Spacer(modifier = Modifier.width(4.dp))
-                    Text("同步歌单", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Text("完全同步", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 }
             }
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            OutlinedButton(
-                onClick = onSync,
+            Row(
                 modifier = Modifier.fillMaxWidth(),
-                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x1AFFFFFF)),
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = textWhite)
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Icon(imageVector = Icons.Filled.Sync, contentDescription = "Sync manifest", modifier = Modifier.size(14.dp))
-                Spacer(modifier = Modifier.width(4.dp))
-                Text("只同步云端歌单清单", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                Button(
+                    onClick = onSync,
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0x14FFFFFF), contentColor = textWhite),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x1AFFFFFF)),
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(imageVector = Icons.Filled.Sync, contentDescription = "Sync manifest", modifier = Modifier.size(14.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("仅同步列表", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
+
+                Button(
+                    onClick = onClearPlaylist,
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0x14FFFFFF), contentColor = textWhite),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x1AFFFFFF)),
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("clear_playlist_button"),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(imageVector = Icons.Filled.DeleteSweep, contentDescription = "Clear local list", modifier = Modifier.size(14.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("清空本地列表", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
-            TextButton(
-                onClick = onClearPlaylist,
-                modifier = Modifier.align(Alignment.CenterHorizontally).testTag("clear_playlist_button")
+            Button(
+                onClick = onDeleteProfile,
+                enabled = profiles.size > 1,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0x33B3261E),
+                    contentColor = Color(0xFFFFDAD6),
+                    disabledContainerColor = Color(0x14FFFFFF),
+                    disabledContentColor = textDim
+                ),
+                border = androidx.compose.foundation.BorderStroke(
+                    1.dp,
+                    if (profiles.size > 1) Color(0x66FF8A80) else Color(0x1AFFFFFF)
+                ),
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp)
             ) {
-                Icon(
-                    imageVector = Icons.Filled.DeleteSweep,
-                    contentDescription = "Clear List",
-                    tint = Color(0xFFFF5252).copy(alpha = 0.8f),
-                    modifier = Modifier.size(16.dp)
-                )
+                Icon(imageVector = Icons.Filled.Delete, contentDescription = "Delete current profile", modifier = Modifier.size(14.dp))
                 Spacer(modifier = Modifier.width(4.dp))
-                Text("清空本地列表", color = Color(0xFFFF5252).copy(alpha = 0.8f), fontSize = 11.sp)
+                Text("删除当前配置", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+}
+
+@Composable
+fun SyncStatusBanner(
+    syncState: SyncState,
+    accentColor: Color,
+    textWhite: Color,
+    textDim: Color,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        color = when (syncState) {
+            is SyncState.Loading -> Color(0x1AD0BCFF)
+            is SyncState.Completed -> Color(0x1AB3FFD6)
+            else -> Color(0x1AFF5252)
+        },
+        border = CardDefaults.outlinedCardBorder(enabled = true).copy(
+            brush = Brush.linearGradient(
+                listOf(
+                    when (syncState) {
+                        is SyncState.Loading -> accentColor
+                        is SyncState.Completed -> Color(0xFFB3FFD6)
+                        else -> Color(0xFFFF5252)
+                    },
+                    Color.Transparent
+                )
+            )
+        )
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (syncState is SyncState.Loading) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(16.dp),
+                    strokeWidth = 2.dp,
+                    color = accentColor
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Text(
+                    text = "正在同步歌单或文件...",
+                    color = textWhite,
+                    fontSize = 13.sp,
+                    modifier = Modifier.weight(1f)
+                )
+            } else {
+                Icon(
+                    imageVector = if (syncState is SyncState.Completed) Icons.Filled.CheckCircle else Icons.Filled.Warning,
+                    contentDescription = "Sync status",
+                    tint = if (syncState is SyncState.Completed) Color(0xFFB3FFD6) else Color(0xFFFF5252),
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = when (val state = syncState) {
+                        is SyncState.Completed -> state.message
+                        is SyncState.Error -> state.message
+                        else -> ""
+                    },
+                    color = textWhite,
+                    fontSize = 13.sp,
+                    modifier = Modifier.weight(1f)
+                )
+                IconButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.size(24.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Close,
+                        contentDescription = "Dismiss sync status",
+                        tint = textDim,
+                        modifier = Modifier.size(14.dp)
+                    )
+                }
             }
         }
     }
@@ -1384,4 +1687,73 @@ fun formatDuration(durationMs: Long): String {
     val mins = totalSecs / 60
     val secs = totalSecs % 60
     return String.format(Locale.ROOT, "%02d:%02d", mins, secs)
+}
+
+private data class ParsedEnvConfig(
+    val endpoint: String? = null,
+    val region: String? = null,
+    val forcePathStyle: Boolean? = null,
+    val bucket: String? = null,
+    val accessKeyId: String? = null,
+    val accessKeySecret: String? = null,
+    val prefix: String? = null
+)
+
+private fun parseEnvClipboardConfig(text: String): ParsedEnvConfig? {
+    if (text.isBlank()) return null
+
+    val pairs = text.lineSequence()
+        .map { it.trim() }
+        .filter { it.isNotEmpty() && !it.startsWith("#") && it.contains("=") }
+        .mapNotNull { line ->
+            val index = line.indexOf('=')
+            if (index <= 0) return@mapNotNull null
+            val key = line.substring(0, index).trim()
+            val value = line.substring(index + 1).trim().trim('"', '\'')
+            key to value
+        }
+        .toMap()
+
+    if (pairs.isEmpty()) return null
+
+    val parsed = ParsedEnvConfig(
+        endpoint = pairs["S3_ENDPOINT"]?.takeIf { it.isNotBlank() },
+        region = pairs["S3_REGION"]?.takeIf { it.isNotBlank() },
+        forcePathStyle = pairs["S3_FORCE_PATH_STYLE"]?.lowercase(Locale.ROOT)?.let {
+            when (it) {
+                "true", "1", "yes", "y" -> true
+                "false", "0", "no", "n" -> false
+                else -> null
+            }
+        },
+        bucket = pairs["S3_BUCKET"]?.takeIf { it.isNotBlank() },
+        accessKeyId = pairs["S3_ACCESS_KEY_ID"]?.takeIf { it.isNotBlank() },
+        accessKeySecret = pairs["S3_SECRET_ACCESS_KEY"]?.takeIf { it.isNotBlank() },
+        prefix = pairs["S3_PREFIX"]?.takeIf { it.isNotBlank() }
+    )
+
+    return if (
+        parsed.endpoint == null &&
+        parsed.region == null &&
+        parsed.forcePathStyle == null &&
+        parsed.bucket == null &&
+        parsed.accessKeyId == null &&
+        parsed.accessKeySecret == null &&
+        parsed.prefix == null
+    ) {
+        null
+    } else {
+        parsed
+    }
+}
+
+private fun buildSuggestedProfileName(config: ParsedEnvConfig): String {
+    val bucket = config.bucket.orEmpty()
+    val prefix = config.prefix.orEmpty().trim('/').substringBefore('/')
+    return when {
+        bucket.isNotBlank() && prefix.isNotBlank() -> "$bucket/$prefix"
+        bucket.isNotBlank() -> bucket
+        config.endpoint != null -> config.endpoint.removePrefix("https://").removePrefix("http://")
+        else -> "配置"
+    }
 }

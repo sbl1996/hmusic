@@ -3,8 +3,8 @@ package com.hastur.hmusic.ui
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.hastur.hmusic.data.BackupProfileEntity
 import com.hastur.hmusic.data.MusicRepository
-import com.hastur.hmusic.data.OssConfigEntity
 import com.hastur.hmusic.data.RemoteSongEntity
 import com.hastur.hmusic.data.SongEntity
 import com.hastur.hmusic.player.LoopMode
@@ -16,17 +16,21 @@ import com.squareup.moshi.JsonAdapter
 import com.squareup.moshi.JsonClass
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 
 enum class LibrarySongStatus {
@@ -60,6 +64,20 @@ sealed class SyncState {
     data class Error(val message: String) : SyncState()
 }
 
+sealed class SongDownloadState {
+    object Idle : SongDownloadState()
+    data class Downloading(
+        val bytesRead: Long,
+        val totalBytes: Long?
+    ) : SongDownloadState() {
+        val progress: Float?
+            get() = totalBytes?.takeIf { it > 0 }?.let { bytesRead.toFloat() / it.toFloat() }
+    }
+
+    data class Failed(val message: String) : SongDownloadState()
+}
+
+@OptIn(ExperimentalCoroutinesApi::class)
 class MusicViewModel(
     private val repository: MusicRepository,
     private val playerManager: MusicPlayerManager,
@@ -75,6 +93,9 @@ class MusicViewModel(
     private val _syncState = MutableStateFlow<SyncState>(SyncState.Idle)
     val syncState: StateFlow<SyncState> = _syncState.asStateFlow()
 
+    private val _downloadStates = MutableStateFlow<Map<String, SongDownloadState>>(emptyMap())
+    val downloadStates: StateFlow<Map<String, SongDownloadState>> = _downloadStates.asStateFlow()
+
     val localSongs: StateFlow<List<SongEntity>> = repository.localSongs
         .stateIn(
             scope = viewModelScope,
@@ -82,7 +103,28 @@ class MusicViewModel(
             initialValue = emptyList()
         )
 
-    val remoteSongs: StateFlow<List<RemoteSongEntity>> = repository.remoteSongs
+    val backupProfiles: StateFlow<List<BackupProfileEntity>> = repository.backupProfilesFlow
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
+
+    val activeProfile: StateFlow<BackupProfileEntity?> = repository.activeBackupProfileFlow
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = null
+        )
+
+    val remoteSongs: StateFlow<List<RemoteSongEntity>> = activeProfile
+        .flatMapLatest { profile ->
+            if (profile == null) {
+                flowOf(emptyList())
+            } else {
+                repository.getRemoteSongsFlow(profile.id)
+            }
+        }
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5000),
@@ -98,25 +140,28 @@ class MusicViewModel(
         initialValue = emptyList()
     )
 
-    val ossConfig: StateFlow<OssConfigEntity?> = repository.ossConfigFlow
-        .stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(5000),
-            initialValue = null
-        )
-
     val currentSong: StateFlow<SongEntity?> = playerManager.currentSong
     val isPlaying: StateFlow<Boolean> = playerManager.isPlaying
     val currentPosition: StateFlow<Long> = playerManager.currentPosition
     val duration: StateFlow<Long> = playerManager.duration
     val loopMode: StateFlow<LoopMode> = playerManager.loopMode
-    val playerError: StateFlow<String?> = playerManager.errorMessage
+    private val shouldShowPlayerError = MutableStateFlow(false)
+    val playerError: StateFlow<String?> = combine(
+        playerManager.errorMessage,
+        shouldShowPlayerError
+    ) { error, shouldShow ->
+        if (shouldShow) error else null
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = null
+    )
 
     private var ossClient: OssClient? = null
 
     init {
         viewModelScope.launch {
-            tryBootstrapOssConfig()
+            ensureDefaultBackupProfile()
         }
 
         viewModelScope.launch(Dispatchers.IO) {
@@ -124,17 +169,18 @@ class MusicViewModel(
         }
 
         viewModelScope.launch {
-            repository.ossConfigFlow.collect { config ->
+            activeProfile.collect { profile ->
                 ossClient?.close()
-                ossClient = if (config != null && config.endpoint.isNotEmpty()) {
+                _downloadStates.value = emptyMap()
+                ossClient = if (profile != null && profile.endpoint.isNotEmpty()) {
                     OssClient(
-                        endpoint = config.endpoint,
-                        region = config.region.ifBlank { OssClient.defaultRegion(config.endpoint) },
-                        forcePathStyle = config.forcePathStyle,
-                        bucket = config.bucket,
-                        accessKeyId = config.accessKeyId,
-                        accessKeySecret = config.accessKeySecret,
-                        prefix = config.prefix
+                        endpoint = profile.endpoint,
+                        region = profile.region.ifBlank { OssClient.defaultRegion(profile.endpoint) },
+                        forcePathStyle = profile.forcePathStyle,
+                        bucket = profile.bucket,
+                        accessKeyId = profile.accessKeyId,
+                        accessKeySecret = profile.accessKeySecret,
+                        prefix = profile.prefix
                     )
                 } else {
                     null
@@ -151,6 +197,7 @@ class MusicViewModel(
     }
 
     fun playSong(song: LibrarySongItem) {
+        shouldShowPlayerError.value = true
         val localSong = song.localSong
         if (localSong == null || !localSong.isDownloaded) {
             _syncState.value = SyncState.Error("当前歌曲未下载到本地")
@@ -167,12 +214,26 @@ class MusicViewModel(
             _syncState.value = SyncState.Error("当前歌曲没有可用的云端备份")
             return
         }
-        _syncState.value = SyncState.Loading
+        val songKey = remoteSong.md5sum.ifBlank { song.md5sum }
+        if (_downloadStates.value[songKey] is SongDownloadState.Downloading) {
+            return
+        }
+        _downloadStates.update { it + (songKey to SongDownloadState.Downloading(bytesRead = 0L, totalBytes = null)) }
 
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val stored = client.downloadSongStream(remoteSong.remoteKey).use {
-                    songStorage.storeRemoteStream(remoteSong.remoteKey, it)
+                val remoteStream = client.downloadSongStream(remoteSong.remoteKey)
+                val stored = remoteStream.inputStream.use {
+                    songStorage.storeRemoteStream(
+                        remoteKey = remoteSong.remoteKey,
+                        inputStream = it,
+                        totalBytes = remoteStream.contentLength,
+                        onProgress = { bytesRead, totalBytes ->
+                            _downloadStates.update { states ->
+                                states + (songKey to SongDownloadState.Downloading(bytesRead, totalBytes))
+                            }
+                        }
+                    )
                 }
                 if (stored.md5sum != remoteSong.md5sum) {
                     stored.file.delete()
@@ -192,24 +253,35 @@ class MusicViewModel(
                     syncTime = System.currentTimeMillis()
                 )
                 repository.insertLocalSong(local)
+                _downloadStates.update { it - songKey }
                 _syncState.value = SyncState.Completed("已同步到本地：${local.title}")
             } catch (e: Exception) {
+                _downloadStates.update {
+                    it + (songKey to SongDownloadState.Failed(e.localizedMessage ?: "未知错误"))
+                }
                 _syncState.value = SyncState.Error("下载歌曲失败: ${e.localizedMessage}")
+                delay(2500)
+                _downloadStates.update { states ->
+                    if (states[songKey] is SongDownloadState.Failed) states - songKey else states
+                }
             }
         }
     }
 
     fun playOrPause() {
+        shouldShowPlayerError.value = true
         playerManager.playOrPause()
         persistPlaybackState()
     }
 
     fun playNext() {
+        shouldShowPlayerError.value = true
         playerManager.playNext()
         persistPlaybackState()
     }
 
     fun playPrevious() {
+        shouldShowPlayerError.value = true
         playerManager.playPrevious()
         persistPlaybackState()
     }
@@ -228,7 +300,69 @@ class MusicViewModel(
         _syncState.value = SyncState.Idle
     }
 
-    fun saveOssConfig(
+    fun showSyncCompleted(message: String) {
+        _syncState.value = SyncState.Completed(message)
+    }
+
+    fun showSyncError(message: String) {
+        _syncState.value = SyncState.Error(message)
+    }
+
+    fun createProfile(copyCurrent: Boolean = false) {
+        viewModelScope.launch {
+            val existingProfiles = backupProfiles.value
+            val source = if (copyCurrent) activeProfile.value else null
+            val now = System.currentTimeMillis()
+            val newProfile = (source ?: BackupProfileEntity()).copy(
+                id = 0,
+                name = nextProfileName(
+                    existingProfiles = existingProfiles,
+                    baseName = if (copyCurrent && source != null) "${source.name} 副本" else "配置"
+                ),
+                isActive = true,
+                createdAt = now,
+                updatedAt = now,
+                lastSyncAt = 0
+            )
+            val profileId = repository.insertBackupProfile(newProfile)
+            repository.activateBackupProfile(profileId)
+            _syncState.value = SyncState.Completed("已创建配置：${newProfile.name}")
+        }
+    }
+
+    fun switchProfile(profileId: Long) {
+        viewModelScope.launch {
+            val profile = repository.getBackupProfile(profileId) ?: return@launch
+            repository.activateBackupProfile(profileId)
+            _syncState.value = SyncState.Completed("已切换到配置：${profile.name}")
+        }
+    }
+
+    fun deleteActiveProfile() {
+        viewModelScope.launch {
+            val current = activeProfile.value
+            val profiles = backupProfiles.value
+            if (current == null) {
+                _syncState.value = SyncState.Error("当前没有可删除的配置")
+                return@launch
+            }
+            if (profiles.size <= 1) {
+                _syncState.value = SyncState.Error("至少保留一个配置")
+                return@launch
+            }
+
+            val nextProfile = profiles.firstOrNull { it.id != current.id }
+            repository.clearRemoteSongsByProfileId(current.id)
+            repository.deleteBackupProfile(current.id)
+            if (nextProfile != null) {
+                repository.activateBackupProfile(nextProfile.id)
+            }
+            _syncState.value = SyncState.Completed("已删除配置：${current.name}")
+        }
+    }
+
+    fun saveActiveProfile(
+        name: String,
         endpoint: String,
         region: String,
         forcePathStyle: Boolean,
@@ -238,28 +372,42 @@ class MusicViewModel(
         prefix: String
     ) {
         viewModelScope.launch {
+            val current = activeProfile.value
+            val now = System.currentTimeMillis()
             val normalizedEndpoint = endpoint.trim()
-            repository.insertOssConfig(
-                OssConfigEntity(
-                    endpoint = normalizedEndpoint,
-                    region = region.trim().ifEmpty { OssClient.defaultRegion(normalizedEndpoint) },
-                    forcePathStyle = forcePathStyle,
-                    bucket = bucket.trim(),
-                    accessKeyId = accessKeyId.trim(),
-                    accessKeySecret = accessKeySecret.trim(),
-                    prefix = prefix.trim()
-                )
+            val normalizedName = name.trim().ifEmpty {
+                nextProfileName(backupProfiles.value, "配置")
+            }
+
+            val profile = BackupProfileEntity(
+                id = current?.id ?: 0,
+                name = normalizedName,
+                endpoint = normalizedEndpoint,
+                region = region.trim().ifEmpty { OssClient.defaultRegion(normalizedEndpoint) },
+                forcePathStyle = forcePathStyle,
+                bucket = bucket.trim(),
+                accessKeyId = accessKeyId.trim(),
+                accessKeySecret = accessKeySecret.trim(),
+                prefix = prefix.trim(),
+                isActive = true,
+                createdAt = current?.createdAt ?: now,
+                updatedAt = now,
+                lastSyncAt = current?.lastSyncAt ?: 0
             )
-            _syncState.value = SyncState.Completed("配置已保存")
+
+            val profileId = repository.insertBackupProfile(profile)
+            repository.activateBackupProfile(profileId)
+            _syncState.value = SyncState.Completed("配置已保存：$normalizedName")
             delay(500)
             syncFromOSS()
         }
     }
 
     fun syncFromOSS() {
+        val profile = activeProfile.value
         val client = ossClient
-        if (client == null) {
-            _syncState.value = SyncState.Error("请先在设置中配置有效的 S3 / OSS 账号信息")
+        if (profile == null || client == null) {
+            _syncState.value = SyncState.Error("请先配置有效的 S3 / OSS Profile")
             return
         }
         _syncState.value = SyncState.Loading
@@ -267,15 +415,13 @@ class MusicViewModel(
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val manifest = loadManifest(client)
-                val remoteEntities = manifest?.songs?.map { it.toRemoteSongEntity() }.orEmpty()
-                repository.clearRemoteSongs()
-                if (remoteEntities.isNotEmpty()) {
-                    repository.insertRemoteSongs(remoteEntities)
-                }
+                val remoteEntities = manifest?.songs?.map { it.toRemoteSongEntity(profile.id) }.orEmpty()
+                repository.replaceRemoteSongs(profile.id, remoteEntities)
+                touchProfileLastSync(profile)
 
                 val downloadedCount = localSongs.value.count { it.isDownloaded }
                 _syncState.value = SyncState.Completed(
-                    "歌单索引已同步：云端 ${remoteEntities.size} 首，本地 ${downloadedCount} 首"
+                    "已同步 ${profile.name}：云端 ${remoteEntities.size} 首，本地 ${downloadedCount} 首"
                 )
             } catch (e: Exception) {
                 _syncState.value = SyncState.Error("同步歌单失败: ${e.localizedMessage}")
@@ -284,9 +430,10 @@ class MusicViewModel(
     }
 
     fun backupPlaylistToOSS() {
+        val profile = activeProfile.value
         val client = ossClient
-        if (client == null) {
-            _syncState.value = SyncState.Error("请先配置 S3 / OSS 后再上传备份")
+        if (profile == null || client == null) {
+            _syncState.value = SyncState.Error("请先配置 S3 / OSS Profile 后再上传备份")
             return
         }
         _syncState.value = SyncState.Loading
@@ -297,9 +444,13 @@ class MusicViewModel(
                 val syncedRemoteSongs = localSongs.value
                     .mapNotNull { normalizeLocalSong(it) }
                     .map { localSong ->
-                        val remoteKey = client.buildRemoteAudioKey(localSong.md5sum, localSong.fileName.ifBlank { File(localSong.localPath).name })
+                        val remoteKey = client.buildRemoteAudioKey(
+                            localSong.md5sum,
+                            localSong.fileName.ifBlank { File(localSong.localPath).name }
+                        )
                         client.uploadSongFile(remoteKey, File(localSong.localPath), localSong.mimeType)
                         RemoteSongEntity(
+                            profileId = profile.id,
                             md5sum = localSong.md5sum,
                             title = localSong.title,
                             artist = localSong.artist,
@@ -324,11 +475,9 @@ class MusicViewModel(
                     error("云端清单写入失败")
                 }
 
-                repository.clearRemoteSongs()
-                if (syncedRemoteSongs.isNotEmpty()) {
-                    repository.insertRemoteSongs(syncedRemoteSongs)
-                }
-                _syncState.value = SyncState.Completed("本地歌曲已备份到云端，歌单索引已刷新")
+                repository.replaceRemoteSongs(profile.id, syncedRemoteSongs)
+                touchProfileLastSync(profile, now)
+                _syncState.value = SyncState.Completed("已备份到 ${profile.name}，歌单索引已刷新")
             } catch (e: Exception) {
                 _syncState.value = SyncState.Error("上传备份失败: ${e.localizedMessage}")
             }
@@ -389,55 +538,34 @@ class MusicViewModel(
         ossClient?.close()
     }
 
-    private suspend fun tryBootstrapOssConfig() {
+    private suspend fun ensureDefaultBackupProfile() {
         try {
-            val existing = repository.getOssConfig()
-            if (existing != null) return
+            if (repository.countBackupProfiles() > 0) return
 
-            val envEndpoint = try { com.hastur.hmusic.BuildConfig.S3_ENDPOINT } catch (_: Exception) { "" }
-            val envRegion = try { com.hastur.hmusic.BuildConfig.S3_REGION } catch (_: Exception) { "" }
-            val envForcePathStyle = try { com.hastur.hmusic.BuildConfig.S3_FORCE_PATH_STYLE } catch (_: Exception) { "" }
-            val envBucket = try { com.hastur.hmusic.BuildConfig.S3_BUCKET } catch (_: Exception) { "" }
-            val envAccessKey = try { com.hastur.hmusic.BuildConfig.S3_ACCESS_KEY_ID } catch (_: Exception) { "" }
-            val envSecretKey = try { com.hastur.hmusic.BuildConfig.S3_SECRET_ACCESS_KEY } catch (_: Exception) { "" }
-            val envPrefix = try { com.hastur.hmusic.BuildConfig.S3_PREFIX } catch (_: Exception) { "" }
+            val now = System.currentTimeMillis()
+            val profile = BackupProfileEntity(
+                name = "默认配置",
+                isActive = true,
+                createdAt = now,
+                updatedAt = now
+            )
 
-            val isEndpointValid = envEndpoint.isNotEmpty() && envEndpoint != "YOUR_S3_ENDPOINT"
-            val isAccessKeyValid = envAccessKey.isNotEmpty() && envAccessKey != "YOUR_S3_ACCESS_KEY_ID"
-            val isSecretValid = envSecretKey.isNotEmpty() && envSecretKey != "YOUR_S3_SECRET_ACCESS_KEY"
-
-            if (isEndpointValid || isAccessKeyValid || isSecretValid) {
-                val defaultBucket = if (envBucket == "YOUR_S3_BUCKET") "" else envBucket
-                val defaultPrefix = if (envPrefix == "YOUR_S3_PREFIX") "" else envPrefix
-                val normalizedEndpoint = if (isEndpointValid) envEndpoint else ""
-                val defaultRegion = when {
-                    envRegion.isBlank() || envRegion == "YOUR_S3_REGION" ->
-                        OssClient.defaultRegion(normalizedEndpoint)
-                    else -> envRegion
-                }
-                val defaultForcePathStyle = when (envForcePathStyle.lowercase()) {
-                    "true", "1", "yes", "y" -> true
-                    "false", "0", "no", "n" -> false
-                    else -> OssClient.defaultForcePathStyle(normalizedEndpoint)
-                }
-
-                repository.insertOssConfig(
-                    OssConfigEntity(
-                        id = 1,
-                        endpoint = normalizedEndpoint,
-                        region = defaultRegion,
-                        forcePathStyle = defaultForcePathStyle,
-                        accessKeyId = if (isAccessKeyValid) envAccessKey else "",
-                        accessKeySecret = if (isSecretValid) envSecretKey else "",
-                        bucket = defaultBucket,
-                        prefix = defaultPrefix
-                    )
-                )
-                _syncState.value = SyncState.Completed("已自动从 .env 生效配置")
-            }
+            val profileId = repository.insertBackupProfile(profile)
+            repository.activateBackupProfile(profileId)
+            _syncState.value = SyncState.Completed("已创建默认云端配置")
         } catch (_: Exception) {
-            // Ignore config bootstrapping errors.
+            // Ignore profile bootstrapping errors.
         }
+    }
+
+    private suspend fun touchProfileLastSync(profile: BackupProfileEntity, syncedAt: Long = System.currentTimeMillis()) {
+        repository.updateBackupProfile(
+            profile.copy(
+                lastSyncAt = syncedAt,
+                updatedAt = syncedAt,
+                isActive = true
+            )
+        )
     }
 
     private fun normalizeLocalSong(song: SongEntity): SongEntity? {
@@ -464,7 +592,11 @@ class MusicViewModel(
                     else -> LoopMode.LIST
                 }
             )
-            playerManager.restoreSong(localSong, savedState.currentPositionMs)
+            playerManager.restoreSong(localSong, savedState.currentPositionMs) {
+                viewModelScope.launch(Dispatchers.IO) {
+                    playbackStateStore.clear()
+                }
+            }
         }
     }
 
@@ -519,6 +651,17 @@ class MusicViewModel(
             )
         }
     }
+
+    private fun nextProfileName(existingProfiles: List<BackupProfileEntity>, baseName: String): String {
+        val existingNames = existingProfiles.map { it.name }.toSet()
+        if (baseName !in existingNames) return baseName
+        var index = 2
+        while (true) {
+            val candidate = "$baseName $index"
+            if (candidate !in existingNames) return candidate
+            index++
+        }
+    }
 }
 
 @JsonClass(generateAdapter = true)
@@ -539,8 +682,9 @@ data class CloudSong(
     val remoteKey: String = "",
     val updatedAt: Long = 0
 ) {
-    fun toRemoteSongEntity(): RemoteSongEntity {
+    fun toRemoteSongEntity(profileId: Long): RemoteSongEntity {
         return RemoteSongEntity(
+            profileId = profileId,
             md5sum = md5sum,
             title = title.ifBlank { fileName.substringBeforeLast(".") },
             artist = artist.ifBlank { "云端备份" },

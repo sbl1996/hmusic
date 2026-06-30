@@ -11,8 +11,8 @@ interface MusicDao {
     @Query("SELECT * FROM songs WHERE md5sum = :md5sum LIMIT 1")
     suspend fun findLocalSongByMd5(md5sum: String): SongEntity?
 
-    @Query("SELECT * FROM remote_songs ORDER BY syncTime DESC")
-    fun getRemoteSongs(): Flow<List<RemoteSongEntity>>
+    @Query("SELECT * FROM remote_songs WHERE profileId = :profileId ORDER BY syncTime DESC")
+    fun getRemoteSongs(profileId: Long): Flow<List<RemoteSongEntity>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertLocalSong(song: SongEntity): Long
@@ -29,12 +29,50 @@ interface MusicDao {
     @Query("DELETE FROM remote_songs")
     suspend fun clearRemoteSongs()
 
-    @Query("SELECT * FROM oss_config WHERE id = 1 LIMIT 1")
-    suspend fun getOssConfig(): OssConfigEntity?
+    @Query("DELETE FROM remote_songs WHERE profileId = :profileId")
+    suspend fun clearRemoteSongsByProfileId(profileId: Long)
 
-    @Query("SELECT * FROM oss_config WHERE id = 1 LIMIT 1")
-    fun getOssConfigFlow(): Flow<OssConfigEntity?>
+    @Query("SELECT * FROM backup_profiles ORDER BY isActive DESC, updatedAt DESC, id DESC")
+    fun getBackupProfilesFlow(): Flow<List<BackupProfileEntity>>
+
+    @Query("SELECT * FROM backup_profiles WHERE isActive = 1 LIMIT 1")
+    suspend fun getActiveBackupProfile(): BackupProfileEntity?
+
+    @Query("SELECT * FROM backup_profiles WHERE isActive = 1 LIMIT 1")
+    fun getActiveBackupProfileFlow(): Flow<BackupProfileEntity?>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertOssConfig(config: OssConfigEntity)
+    suspend fun insertBackupProfile(profile: BackupProfileEntity): Long
+
+    @Update
+    suspend fun updateBackupProfile(profile: BackupProfileEntity)
+
+    @Query("DELETE FROM backup_profiles WHERE id = :profileId")
+    suspend fun deleteBackupProfile(profileId: Long)
+
+    @Query("UPDATE backup_profiles SET isActive = 0")
+    suspend fun clearActiveBackupProfiles()
+
+    @Query("UPDATE backup_profiles SET isActive = 1, updatedAt = :updatedAt WHERE id = :profileId")
+    suspend fun setActiveBackupProfile(profileId: Long, updatedAt: Long)
+
+    @Query("SELECT COUNT(*) FROM backup_profiles")
+    suspend fun countBackupProfiles(): Int
+
+    @Query("SELECT * FROM backup_profiles WHERE id = :profileId LIMIT 1")
+    suspend fun getBackupProfile(profileId: Long): BackupProfileEntity?
+
+    @Transaction
+    suspend fun activateBackupProfile(profileId: Long, updatedAt: Long = System.currentTimeMillis()) {
+        clearActiveBackupProfiles()
+        setActiveBackupProfile(profileId, updatedAt)
+    }
+
+    @Transaction
+    suspend fun replaceRemoteSongs(profileId: Long, songs: List<RemoteSongEntity>) {
+        clearRemoteSongsByProfileId(profileId)
+        if (songs.isNotEmpty()) {
+            insertRemoteSongs(songs)
+        }
+    }
 }

@@ -27,6 +27,8 @@ class MusicPlayerManager(private val context: Context) {
     private val tag = "MusicPlayerManager"
     private var pendingSeekPositionMs: Long = 0L
     private var pendingAutoPlay: Boolean = true
+    private var suppressLoadErrorMessage: Boolean = false
+    private var pendingLoadFailureAction: (() -> Unit)? = null
 
     // Exposed Playback States
     private val _currentSong = MutableStateFlow<SongEntity?>(null)
@@ -74,6 +76,8 @@ class MusicPlayerManager(private val context: Context) {
                 } else {
                     _isPlaying.value = false
                 }
+                suppressLoadErrorMessage = false
+                pendingLoadFailureAction = null
                 _errorMessage.value = null
             }
             setOnCompletionListener {
@@ -82,12 +86,24 @@ class MusicPlayerManager(private val context: Context) {
             setOnErrorListener { _, what, extra ->
                 Log.e(tag, "MediaPlayer Error: what=$what extra=$extra")
                 _isPlaying.value = false
-                _errorMessage.value = "无法播放此音乐格式或云端地址不可达"
+                val suppressError = suppressLoadErrorMessage
+                val onFailure = pendingLoadFailureAction
+                suppressLoadErrorMessage = false
+                pendingLoadFailureAction = null
+                if (suppressError) {
+                    resetLoadedSongState()
+                    _errorMessage.value = null
+                    onFailure?.invoke()
+                } else {
+                    _errorMessage.value = "无法播放此音乐格式或云端地址不可达"
+                }
                 stopProgressTracker()
                 // Auto skip to next item after 2 seconds on error
-                scope.launch {
-                    delay(2000)
-                    playNext()
+                if (!suppressError) {
+                    scope.launch {
+                        delay(2000)
+                        playNext()
+                    }
                 }
                 true
             }
@@ -115,16 +131,28 @@ class MusicPlayerManager(private val context: Context) {
     }
 
     fun playSong(song: SongEntity) {
-        loadSong(song, startPositionMs = 0L, autoPlay = true)
+        loadSong(song, startPositionMs = 0L, autoPlay = true, suppressErrorMessage = false, onLoadFailure = null)
         PlaybackService.ensureStarted(context)
     }
 
-    fun restoreSong(song: SongEntity, startPositionMs: Long) {
-        loadSong(song, startPositionMs = startPositionMs, autoPlay = false)
+    fun restoreSong(song: SongEntity, startPositionMs: Long, onRestoreFailure: (() -> Unit)? = null) {
+        loadSong(
+            song = song,
+            startPositionMs = startPositionMs,
+            autoPlay = false,
+            suppressErrorMessage = true,
+            onLoadFailure = onRestoreFailure
+        )
         PlaybackService.ensureStarted(context)
     }
 
-    private fun loadSong(song: SongEntity, startPositionMs: Long, autoPlay: Boolean) {
+    private fun loadSong(
+        song: SongEntity,
+        startPositionMs: Long,
+        autoPlay: Boolean,
+        suppressErrorMessage: Boolean,
+        onLoadFailure: (() -> Unit)?
+    ) {
         _currentSong.value = song
         _currentPosition.value = startPositionMs.coerceAtLeast(0L)
         _duration.value = 0L
@@ -132,6 +160,8 @@ class MusicPlayerManager(private val context: Context) {
         _errorMessage.value = null
         pendingSeekPositionMs = startPositionMs
         pendingAutoPlay = autoPlay
+        suppressLoadErrorMessage = suppressErrorMessage
+        pendingLoadFailureAction = onLoadFailure
 
         try {
             if (mediaPlayer == null) {
@@ -150,7 +180,17 @@ class MusicPlayerManager(private val context: Context) {
             }
         } catch (e: Exception) {
             Log.e(tag, "Failed to play song: ${song.title}", e)
-            _errorMessage.value = "当前歌曲未下载到本地，或本地文件不可用"
+            val suppressError = suppressLoadErrorMessage
+            val onFailure = pendingLoadFailureAction
+            suppressLoadErrorMessage = false
+            pendingLoadFailureAction = null
+            if (suppressError) {
+                resetLoadedSongState()
+                _errorMessage.value = null
+                onFailure?.invoke()
+            } else {
+                _errorMessage.value = "当前歌曲未下载到本地，或本地文件不可用"
+            }
             _isPlaying.value = false
         }
     }
@@ -262,6 +302,13 @@ class MusicPlayerManager(private val context: Context) {
     private fun stopProgressTracker() {
         progressJob?.cancel()
         progressJob = null
+    }
+
+    private fun resetLoadedSongState() {
+        _currentSong.value = null
+        _currentPosition.value = 0L
+        _duration.value = 0L
+        _isPlaying.value = false
     }
 
     fun clear() {

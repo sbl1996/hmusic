@@ -6,6 +6,18 @@ plugins {
   alias(libs.plugins.secrets)
 }
 
+val releaseKeystorePath = System.getenv("KEYSTORE_PATH") ?: "${rootDir}/my-upload-key.jks"
+val releaseStorePassword = System.getenv("STORE_PASSWORD")
+val releaseKeyPassword = System.getenv("KEY_PASSWORD")
+val debugKeystorePath = if (file("${rootDir}/debug.keystore").exists()) {
+  "${rootDir}/debug.keystore"
+} else {
+  "${System.getProperty("user.home")}/.android/debug.keystore"
+}
+val hasReleaseSigning = file(releaseKeystorePath).exists() &&
+  !releaseStorePassword.isNullOrBlank() &&
+  !releaseKeyPassword.isNullOrBlank()
+
 android {
   namespace = "com.hastur.hmusic"
   compileSdk { version = release(36) { minorApiLevel = 1 } }
@@ -22,14 +34,13 @@ android {
 
   signingConfigs {
     create("release") {
-      val keystorePath = System.getenv("KEYSTORE_PATH") ?: "${rootDir}/my-upload-key.jks"
-      storeFile = file(keystorePath)
-      storePassword = System.getenv("STORE_PASSWORD")
+      storeFile = file(releaseKeystorePath)
+      storePassword = releaseStorePassword
       keyAlias = "upload"
-      keyPassword = System.getenv("KEY_PASSWORD")
+      keyPassword = releaseKeyPassword
     }
     create("debugConfig") {
-      storeFile = file("${rootDir}/debug.keystore")
+      storeFile = file(debugKeystorePath)
       storePassword = "android"
       keyAlias = "androiddebugkey"
       keyPassword = "android"
@@ -39,9 +50,10 @@ android {
   buildTypes {
     release {
       isCrunchPngs = false
-      isMinifyEnabled = false
+      isMinifyEnabled = true
+      isShrinkResources = true
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-      signingConfig = signingConfigs.getByName("release")
+      signingConfig = signingConfigs.getByName(if (hasReleaseSigning) "release" else "debugConfig")
     }
     debug {
     }

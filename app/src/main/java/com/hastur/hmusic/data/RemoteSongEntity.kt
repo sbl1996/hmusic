@@ -6,10 +6,11 @@ import androidx.room.PrimaryKey
 
 @Entity(
     tableName = "remote_songs",
-    indices = [Index(value = ["md5sum"], unique = true)]
+    indices = [Index(value = ["profileId", "md5sum"], unique = true)]
 )
 data class RemoteSongEntity(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,
+    val profileId: Long,
     val md5sum: String,
     val title: String,
     val artist: String,

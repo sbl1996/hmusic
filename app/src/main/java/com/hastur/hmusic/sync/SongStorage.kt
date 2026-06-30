@@ -55,11 +55,24 @@ class SongStorage(private val context: Context) {
         )
     }
 
-    fun storeRemoteStream(remoteKey: String, inputStream: InputStream): StoredSongFile {
+    fun storeRemoteStream(
+        remoteKey: String,
+        inputStream: InputStream,
+        totalBytes: Long? = null,
+        onProgress: (bytesRead: Long, totalBytes: Long?) -> Unit = { _, _ -> }
+    ): StoredSongFile {
         val normalizedName = normalizeFileName(remoteKey.substringAfterLast("/").ifBlank { "track" })
         val tempFile = File(songDir, "download-${System.currentTimeMillis()}-$normalizedName")
         tempFile.outputStream().use { output ->
-            inputStream.copyTo(output)
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            var bytesRead = 0L
+            while (true) {
+                val read = inputStream.read(buffer)
+                if (read <= 0) break
+                output.write(buffer, 0, read)
+                bytesRead += read
+                onProgress(bytesRead, totalBytes)
+            }
         }
 
         val md5 = fileMd5(tempFile)

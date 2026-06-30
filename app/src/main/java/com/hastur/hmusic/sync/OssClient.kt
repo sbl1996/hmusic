@@ -4,6 +4,7 @@ import software.amazon.awssdk.auth.credentials.AnonymousCredentialsProvider
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider
 import software.amazon.awssdk.core.ResponseBytes
+import software.amazon.awssdk.core.ResponseInputStream
 import software.amazon.awssdk.core.sync.RequestBody
 import software.amazon.awssdk.http.urlconnection.UrlConnectionHttpClient
 import software.amazon.awssdk.regions.Region
@@ -19,6 +20,11 @@ import java.io.File
 import java.io.InputStream
 import java.net.URI
 import java.util.Locale
+
+data class RemoteSongStream(
+    val inputStream: InputStream,
+    val contentLength: Long?
+)
 
 class OssClient(
     private val endpoint: String,
@@ -102,12 +108,17 @@ class OssClient(
         return remoteKey
     }
 
-    suspend fun downloadSongStream(remoteKey: String): InputStream {
+    suspend fun downloadSongStream(remoteKey: String): RemoteSongStream {
         val request = GetObjectRequest.builder()
             .bucket(bucket)
             .key(remoteKey)
             .build()
-        return s3Client.getObject(request)
+        val response: ResponseInputStream<GetObjectResponse> = s3Client.getObject(request)
+        val contentLength = response.response().contentLength().takeIf { it > 0 }
+        return RemoteSongStream(
+            inputStream = response,
+            contentLength = contentLength
+        )
     }
 
     override fun close() {
