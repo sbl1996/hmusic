@@ -57,6 +57,7 @@ import com.hastur.hmusic.data.BackupProfileEntity
 import com.hastur.hmusic.player.LoopMode
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 @Composable
@@ -67,7 +68,7 @@ fun MusicPlayerScreen(
     val songs by viewModel.allSongs.collectAsState()
     val backupProfiles by viewModel.backupProfiles.collectAsState()
     val activeProfile by viewModel.activeProfile.collectAsState()
-    val syncState by viewModel.syncState.collectAsState()
+    val statusMessageState by viewModel.statusMessageState.collectAsState()
     val downloadStates by viewModel.downloadStates.collectAsState()
 
     val currentSong by viewModel.currentSong.collectAsState()
@@ -76,6 +77,7 @@ fun MusicPlayerScreen(
     val duration by viewModel.duration.collectAsState()
     val loopMode by viewModel.loopMode.collectAsState()
     val playerError by viewModel.playerError.collectAsState()
+    val bannerAutoDismissMillis = 3000L
 
     var showSettings by remember { mutableStateOf(false) }
     var showAddDialog by remember { mutableStateOf(false) }
@@ -125,6 +127,16 @@ fun MusicPlayerScreen(
         ),
         label = "breath"
     )
+
+    LaunchedEffect(statusMessageState) {
+        when (statusMessageState) {
+            is StatusMessageState.Completed, is StatusMessageState.Error -> {
+                delay(bannerAutoDismissMillis)
+                viewModel.resetStatusMessage()
+            }
+            else -> Unit
+        }
+    }
 
     Box(
         modifier = modifier
@@ -234,7 +246,7 @@ fun MusicPlayerScreen(
                 BackupSettingsPage(
                     profiles = backupProfiles,
                     activeProfile = activeProfile,
-                    syncState = syncState,
+                    statusMessageState = statusMessageState,
                     onSave = { name, endpoint, region, forcePathStyle, bucket, ak, sk, prefix ->
                         viewModel.saveActiveProfile(name, endpoint, region, forcePathStyle, bucket, ak, sk, prefix)
                     },
@@ -245,9 +257,9 @@ fun MusicPlayerScreen(
                     onSyncPlaylist = { viewModel.syncFromOSS() },
                     onSync = { viewModel.syncFromOSS() },
                     onClearPlaylist = { viewModel.clearPlaylist() },
-                    onDismissSyncState = viewModel::resetSyncState,
-                    onShowSyncCompleted = viewModel::showSyncCompleted,
-                    onShowSyncError = viewModel::showSyncError,
+                    onDismissStatusMessage = viewModel::resetStatusMessage,
+                    onShowStatusCompleted = viewModel::showStatusCompleted,
+                    onShowStatusError = viewModel::showStatusError,
                     accentColor = accentNeonColor,
                     textWhite = textWhite,
                     textDim = textDim,
@@ -576,7 +588,7 @@ fun MusicPlayerScreen(
             }
         }
 
-        if (!showSettings && syncState != SyncState.Idle) {
+        if (!showSettings && statusMessageState != StatusMessageState.Idle) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -584,12 +596,12 @@ fun MusicPlayerScreen(
                     .zIndex(1f),
                 contentAlignment = Alignment.TopCenter
             ) {
-                SyncStatusBanner(
-                    syncState = syncState,
+                StatusMessageBanner(
+                    statusMessageState = statusMessageState,
                     accentColor = accentNeonColor,
                     textWhite = textWhite,
                     textDim = textDim,
-                    onDismiss = viewModel::resetSyncState
+                    onDismiss = viewModel::resetStatusMessage
                 )
             }
         }
@@ -600,7 +612,7 @@ fun MusicPlayerScreen(
 fun BackupSettingsPage(
     profiles: List<BackupProfileEntity>,
     activeProfile: BackupProfileEntity?,
-    syncState: SyncState,
+    statusMessageState: StatusMessageState,
     onSave: (String, String, String, Boolean, String, String, String, String) -> Unit,
     onCreateProfile: (Boolean) -> Unit,
     onSwitchProfile: (Long) -> Unit,
@@ -609,9 +621,9 @@ fun BackupSettingsPage(
     onSyncPlaylist: () -> Unit,
     onSync: () -> Unit,
     onClearPlaylist: () -> Unit,
-    onDismissSyncState: () -> Unit,
-    onShowSyncCompleted: (String) -> Unit,
-    onShowSyncError: (String) -> Unit,
+    onDismissStatusMessage: () -> Unit,
+    onShowStatusCompleted: (String) -> Unit,
+    onShowStatusError: (String) -> Unit,
     accentColor: Color,
     textWhite: Color,
     textDim: Color,
@@ -640,8 +652,8 @@ fun BackupSettingsPage(
                 onSyncPlaylist = onSyncPlaylist,
                 onSync = onSync,
                 onClearPlaylist = onClearPlaylist,
-                onShowSyncCompleted = onShowSyncCompleted,
-                onShowSyncError = onShowSyncError,
+                onShowStatusCompleted = onShowStatusCompleted,
+                onShowStatusError = onShowStatusError,
                 cardBackground = Color(0x13FFFFFF),
                 accentColor = accentColor,
                 textWhite = textWhite,
@@ -651,7 +663,7 @@ fun BackupSettingsPage(
             Spacer(modifier = Modifier.height(24.dp))
         }
 
-        if (syncState != SyncState.Idle) {
+        if (statusMessageState != StatusMessageState.Idle) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -659,12 +671,12 @@ fun BackupSettingsPage(
                     .zIndex(1f),
                 contentAlignment = Alignment.TopCenter
             ) {
-                SyncStatusBanner(
-                    syncState = syncState,
+                StatusMessageBanner(
+                    statusMessageState = statusMessageState,
                     accentColor = accentColor,
                     textWhite = textWhite,
                     textDim = textDim,
-                    onDismiss = onDismissSyncState,
+                    onDismiss = onDismissStatusMessage,
                     modifier = Modifier.padding(top = 8.dp)
                 )
             }
@@ -1165,8 +1177,8 @@ fun OssSettingsCard(
     onSyncPlaylist: () -> Unit,
     onSync: () -> Unit,
     onClearPlaylist: () -> Unit,
-    onShowSyncCompleted: (String) -> Unit,
-    onShowSyncError: (String) -> Unit,
+    onShowStatusCompleted: (String) -> Unit,
+    onShowStatusError: (String) -> Unit,
     cardBackground: Color,
     accentColor: Color,
     textWhite: Color,
@@ -1479,7 +1491,7 @@ fun OssSettingsCard(
                             .orEmpty()
                         val parsed = parseEnvClipboardConfig(rawText)
                         if (parsed == null) {
-                            onShowSyncError("剪贴板里没有可解析的 S3 配置")
+                            onShowStatusError("剪贴板里没有可解析的 S3 配置")
                             Toast.makeText(context, "剪贴板里没有可解析的 S3 配置", Toast.LENGTH_SHORT).show()
                         } else {
                             endpoint = parsed.endpoint ?: endpoint
@@ -1492,7 +1504,7 @@ fun OssSettingsCard(
                             if (profileName.isBlank()) {
                                 profileName = buildSuggestedProfileName(parsed)
                             }
-                            onShowSyncCompleted("已从剪贴板填充配置")
+                            onShowStatusCompleted("已从剪贴板填充配置")
                         }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0x14FFFFFF), contentColor = textWhite),
@@ -1601,44 +1613,50 @@ fun OssSettingsCard(
 }
 
 @Composable
-fun SyncStatusBanner(
-    syncState: SyncState,
+fun StatusMessageBanner(
+    statusMessageState: StatusMessageState,
     accentColor: Color,
     textWhite: Color,
     textDim: Color,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val containerColor = when (statusMessageState) {
+        is StatusMessageState.Loading -> Color(0xFF1E2633)
+        is StatusMessageState.Completed -> Color(0xFF1B2922)
+        is StatusMessageState.Error -> Color(0xFF342020)
+        StatusMessageState.Idle -> Color(0xFF1E2633)
+    }
+    val borderColor = when (statusMessageState) {
+        is StatusMessageState.Loading -> accentColor.copy(alpha = 0.7f)
+        is StatusMessageState.Completed -> Color(0xFF7ED9A8)
+        is StatusMessageState.Error -> Color(0xFFFF8A80)
+        StatusMessageState.Idle -> accentColor.copy(alpha = 0.7f)
+    }
+    val iconTint = when (statusMessageState) {
+        is StatusMessageState.Loading -> accentColor
+        is StatusMessageState.Completed -> Color(0xFFB8F5CF)
+        is StatusMessageState.Error -> Color(0xFFFFB4AB)
+        StatusMessageState.Idle -> accentColor
+    }
+
     Surface(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
-        color = when (syncState) {
-            is SyncState.Loading -> Color(0x1AD0BCFF)
-            is SyncState.Completed -> Color(0x1AB3FFD6)
-            else -> Color(0x1AFF5252)
-        },
-        border = CardDefaults.outlinedCardBorder(enabled = true).copy(
-            brush = Brush.linearGradient(
-                listOf(
-                    when (syncState) {
-                        is SyncState.Loading -> accentColor
-                        is SyncState.Completed -> Color(0xFFB3FFD6)
-                        else -> Color(0xFFFF5252)
-                    },
-                    Color.Transparent
-                )
-            )
-        )
+        color = containerColor,
+        border = BorderStroke(1.dp, borderColor),
+        tonalElevation = 0.dp,
+        shadowElevation = 10.dp
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            if (syncState is SyncState.Loading) {
+            if (statusMessageState is StatusMessageState.Loading) {
                 CircularProgressIndicator(
                     modifier = Modifier.size(16.dp),
                     strokeWidth = 2.dp,
-                    color = accentColor
+                    color = iconTint
                 )
                 Spacer(modifier = Modifier.width(10.dp))
                 Text(
@@ -1649,16 +1667,16 @@ fun SyncStatusBanner(
                 )
             } else {
                 Icon(
-                    imageVector = if (syncState is SyncState.Completed) Icons.Filled.CheckCircle else Icons.Filled.Warning,
+                    imageVector = if (statusMessageState is StatusMessageState.Completed) Icons.Filled.CheckCircle else Icons.Filled.Warning,
                     contentDescription = "Sync status",
-                    tint = if (syncState is SyncState.Completed) Color(0xFFB3FFD6) else Color(0xFFFF5252),
+                    tint = iconTint,
                     modifier = Modifier.size(18.dp)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = when (val state = syncState) {
-                        is SyncState.Completed -> state.message
-                        is SyncState.Error -> state.message
+                    text = when (val state = statusMessageState) {
+                        is StatusMessageState.Completed -> state.message
+                        is StatusMessageState.Error -> state.message
                         else -> ""
                     },
                     color = textWhite,
@@ -1672,7 +1690,7 @@ fun SyncStatusBanner(
                     Icon(
                         imageVector = Icons.Filled.Close,
                         contentDescription = "Dismiss sync status",
-                        tint = textDim,
+                        tint = textWhite.copy(alpha = 0.72f),
                         modifier = Modifier.size(14.dp)
                     )
                 }

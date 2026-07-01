@@ -57,11 +57,11 @@ data class LibrarySongItem(
         get() = remoteSong != null && !isDownloaded
 }
 
-sealed class SyncState {
-    object Idle : SyncState()
-    object Loading : SyncState()
-    data class Completed(val message: String) : SyncState()
-    data class Error(val message: String) : SyncState()
+sealed class StatusMessageState {
+    object Idle : StatusMessageState()
+    object Loading : StatusMessageState()
+    data class Completed(val message: String) : StatusMessageState()
+    data class Error(val message: String) : StatusMessageState()
 }
 
 sealed class SongDownloadState {
@@ -90,8 +90,8 @@ class MusicViewModel(
     private val manifestAdapter: JsonAdapter<CloudPlaylistManifest> =
         moshi.adapter(CloudPlaylistManifest::class.java)
 
-    private val _syncState = MutableStateFlow<SyncState>(SyncState.Idle)
-    val syncState: StateFlow<SyncState> = _syncState.asStateFlow()
+    private val _statusMessageState = MutableStateFlow<StatusMessageState>(StatusMessageState.Idle)
+    val statusMessageState: StateFlow<StatusMessageState> = _statusMessageState.asStateFlow()
 
     private val _downloadStates = MutableStateFlow<Map<String, SongDownloadState>>(emptyMap())
     val downloadStates: StateFlow<Map<String, SongDownloadState>> = _downloadStates.asStateFlow()
@@ -200,7 +200,7 @@ class MusicViewModel(
         shouldShowPlayerError.value = true
         val localSong = song.localSong
         if (localSong == null || !localSong.isDownloaded) {
-            _syncState.value = SyncState.Error("当前歌曲未下载到本地")
+            _statusMessageState.value = StatusMessageState.Error("当前歌曲未下载到本地")
             return
         }
         playerManager.playSong(localSong)
@@ -211,7 +211,7 @@ class MusicViewModel(
         val client = ossClient
         val remoteSong = song.remoteSong
         if (client == null || remoteSong == null) {
-            _syncState.value = SyncState.Error("当前歌曲没有可用的云端备份")
+            _statusMessageState.value = StatusMessageState.Error("当前歌曲没有可用的云端备份")
             return
         }
         val songKey = remoteSong.md5sum.ifBlank { song.md5sum }
@@ -254,12 +254,12 @@ class MusicViewModel(
                 )
                 repository.insertLocalSong(local)
                 _downloadStates.update { it - songKey }
-                _syncState.value = SyncState.Completed("已同步到本地：${local.title}")
+                _statusMessageState.value = StatusMessageState.Completed("已同步到本地：${local.title}")
             } catch (e: Exception) {
                 _downloadStates.update {
                     it + (songKey to SongDownloadState.Failed(e.localizedMessage ?: "未知错误"))
                 }
-                _syncState.value = SyncState.Error("下载歌曲失败: ${e.localizedMessage}")
+                _statusMessageState.value = StatusMessageState.Error("下载歌曲失败: ${e.localizedMessage}")
                 delay(2500)
                 _downloadStates.update { states ->
                     if (states[songKey] is SongDownloadState.Failed) states - songKey else states
@@ -296,16 +296,16 @@ class MusicViewModel(
         persistPlaybackState()
     }
 
-    fun resetSyncState() {
-        _syncState.value = SyncState.Idle
+    fun resetStatusMessage() {
+        _statusMessageState.value = StatusMessageState.Idle
     }
 
-    fun showSyncCompleted(message: String) {
-        _syncState.value = SyncState.Completed(message)
+    fun showStatusCompleted(message: String) {
+        _statusMessageState.value = StatusMessageState.Completed(message)
     }
 
-    fun showSyncError(message: String) {
-        _syncState.value = SyncState.Error(message)
+    fun showStatusError(message: String) {
+        _statusMessageState.value = StatusMessageState.Error(message)
     }
 
     fun createProfile(copyCurrent: Boolean = false) {
@@ -326,7 +326,7 @@ class MusicViewModel(
             )
             val profileId = repository.insertBackupProfile(newProfile)
             repository.activateBackupProfile(profileId)
-            _syncState.value = SyncState.Completed("已创建配置：${newProfile.name}")
+            _statusMessageState.value = StatusMessageState.Completed("已创建配置：${newProfile.name}")
         }
     }
 
@@ -334,7 +334,7 @@ class MusicViewModel(
         viewModelScope.launch {
             val profile = repository.getBackupProfile(profileId) ?: return@launch
             repository.activateBackupProfile(profileId)
-            _syncState.value = SyncState.Completed("已切换到配置：${profile.name}")
+            _statusMessageState.value = StatusMessageState.Completed("已切换到配置：${profile.name}")
         }
     }
 
@@ -343,11 +343,11 @@ class MusicViewModel(
             val current = activeProfile.value
             val profiles = backupProfiles.value
             if (current == null) {
-                _syncState.value = SyncState.Error("当前没有可删除的配置")
+                _statusMessageState.value = StatusMessageState.Error("当前没有可删除的配置")
                 return@launch
             }
             if (profiles.size <= 1) {
-                _syncState.value = SyncState.Error("至少保留一个配置")
+                _statusMessageState.value = StatusMessageState.Error("至少保留一个配置")
                 return@launch
             }
 
@@ -357,7 +357,7 @@ class MusicViewModel(
             if (nextProfile != null) {
                 repository.activateBackupProfile(nextProfile.id)
             }
-            _syncState.value = SyncState.Completed("已删除配置：${current.name}")
+            _statusMessageState.value = StatusMessageState.Completed("已删除配置：${current.name}")
         }
     }
 
@@ -397,7 +397,7 @@ class MusicViewModel(
 
             val profileId = repository.insertBackupProfile(profile)
             repository.activateBackupProfile(profileId)
-            _syncState.value = SyncState.Completed("配置已保存：$normalizedName")
+            _statusMessageState.value = StatusMessageState.Completed("配置已保存：$normalizedName")
             delay(500)
             syncFromOSS()
         }
@@ -407,10 +407,10 @@ class MusicViewModel(
         val profile = activeProfile.value
         val client = ossClient
         if (profile == null || client == null) {
-            _syncState.value = SyncState.Error("请先配置有效的 S3 / OSS Profile")
+            _statusMessageState.value = StatusMessageState.Error("请先配置有效的 S3 / OSS Profile")
             return
         }
-        _syncState.value = SyncState.Loading
+        _statusMessageState.value = StatusMessageState.Loading
 
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -420,11 +420,11 @@ class MusicViewModel(
                 touchProfileLastSync(profile)
 
                 val downloadedCount = localSongs.value.count { it.isDownloaded }
-                _syncState.value = SyncState.Completed(
+                _statusMessageState.value = StatusMessageState.Completed(
                     "已同步 ${profile.name}：云端 ${remoteEntities.size} 首，本地 ${downloadedCount} 首"
                 )
             } catch (e: Exception) {
-                _syncState.value = SyncState.Error("同步歌单失败: ${e.localizedMessage}")
+                _statusMessageState.value = StatusMessageState.Error("同步歌单失败: ${e.localizedMessage}")
             }
         }
     }
@@ -433,10 +433,10 @@ class MusicViewModel(
         val profile = activeProfile.value
         val client = ossClient
         if (profile == null || client == null) {
-            _syncState.value = SyncState.Error("请先配置 S3 / OSS Profile 后再上传备份")
+            _statusMessageState.value = StatusMessageState.Error("请先配置 S3 / OSS Profile 后再上传备份")
             return
         }
-        _syncState.value = SyncState.Loading
+        _statusMessageState.value = StatusMessageState.Loading
 
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -477,9 +477,9 @@ class MusicViewModel(
 
                 repository.replaceRemoteSongs(profile.id, syncedRemoteSongs)
                 touchProfileLastSync(profile, now)
-                _syncState.value = SyncState.Completed("已备份到 ${profile.name}，歌单索引已刷新")
+                _statusMessageState.value = StatusMessageState.Completed("已备份到 ${profile.name}，歌单索引已刷新")
             } catch (e: Exception) {
-                _syncState.value = SyncState.Error("上传备份失败: ${e.localizedMessage}")
+                _statusMessageState.value = StatusMessageState.Error("上传备份失败: ${e.localizedMessage}")
             }
         }
     }
@@ -502,13 +502,13 @@ class MusicViewModel(
                     syncTime = System.currentTimeMillis()
                 )
                 repository.insertLocalSong(song)
-                _syncState.value = SyncState.Completed("已导入本地歌曲：${song.title}")
+                _statusMessageState.value = StatusMessageState.Completed("已导入本地歌曲：${song.title}")
                 viewModelScope.launch {
                     playerManager.playSong(song)
                     persistPlaybackState()
                 }
             } catch (e: Exception) {
-                _syncState.value = SyncState.Error("导入本地歌曲失败: ${e.localizedMessage}")
+                _statusMessageState.value = StatusMessageState.Error("导入本地歌曲失败: ${e.localizedMessage}")
             }
         }
     }
@@ -552,7 +552,7 @@ class MusicViewModel(
 
             val profileId = repository.insertBackupProfile(profile)
             repository.activateBackupProfile(profileId)
-            _syncState.value = SyncState.Completed("已创建默认云端配置")
+            _statusMessageState.value = StatusMessageState.Completed("已创建默认云端配置")
         } catch (_: Exception) {
             // Ignore profile bootstrapping errors.
         }
