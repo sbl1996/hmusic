@@ -19,7 +19,6 @@
 ## 运行
 
 ```bash
-cp .env.example .env
 ./gradlew assembleDebug
 ```
 
@@ -27,15 +26,15 @@ cp .env.example .env
 
 ## 配置
 
-项目通过 `.env` 读取配置，常用项：
+项目不再读取 `.env`。S3 / OSS 备份配置通过应用内设置页面维护，包括：
 
-- `S3_ENDPOINT`
-- `S3_REGION`
-- `S3_FORCE_PATH_STYLE`
-- `S3_BUCKET`
-- `S3_ACCESS_KEY_ID`
-- `S3_SECRET_ACCESS_KEY`
-- `S3_PREFIX`
+- Endpoint
+- Region
+- Force Path-Style
+- Bucket
+- AccessKey ID
+- AccessKey Secret
+- Prefix
 
 不配置 S3 也可以启动应用，只是不能使用备份与恢复。
 

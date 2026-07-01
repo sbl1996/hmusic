@@ -11,8 +11,8 @@
 Resources and manifest files are in `app/src/main/res` and `app/src/main/AndroidManifest.xml`. Local and instrumented tests belong in `app/src/test` and `app/src/androidTest`. Dependency versions are centralized in `gradle/libs.versions.toml`.
 
 ## Build, Test, and Development Commands
-- `cp .env.example .env` initializes local config for the secrets plugin.
 - `./gradlew assembleDebug` builds the debug APK.
+- `set -a; source ./.release-signing.env >/dev/null 2>&1; set +a; ./gradlew assembleRelease` builds the signed release APK.
 - `./gradlew test` runs JVM unit tests, including Robolectric-based tests.
 - `./gradlew connectedAndroidTest` runs device or emulator instrumentation tests.
 - `./gradlew lint` runs Android lint checks.
@@ -32,4 +32,4 @@ Robolectric and Roborazzi are available, so prefer fast local tests for UI logic
 ## Commit & Pull Request Guidelines
 Use short, imperative commit subjects, preferably following Conventional Commits.
 
-Pull requests should include a concise summary, test notes, linked issue or task if applicable, and screenshots for visible UI changes. Call out `.env` or signing-related changes explicitly.
+Pull requests should include a concise summary, test notes, linked issue or task if applicable, and screenshots for visible UI changes. Call out signing-related changes explicitly.
