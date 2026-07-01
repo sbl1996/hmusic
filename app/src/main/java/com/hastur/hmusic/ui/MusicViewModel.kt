@@ -1,5 +1,6 @@
 package com.hastur.hmusic.ui
 
+import android.media.MediaMetadataRetriever
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -24,6 +25,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
@@ -185,6 +187,14 @@ class MusicViewModel(
                 } else {
                     null
                 }
+            }
+        }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            combine(playerManager.currentSong, playerManager.duration) { song, durationMs ->
+                song to durationMs
+            }.distinctUntilChanged().collect { (song, durationMs) ->
+                persistResolvedDuration(song, durationMs)
             }
         }
 
@@ -494,7 +504,10 @@ class MusicViewModel(
                     md5sum = stored.md5sum,
                     title = title.trim().ifBlank { existing?.title ?: stored.fileName.substringBeforeLast(".") },
                     artist = artist.trim().ifBlank { existing?.artist ?: "本地乐迷" },
-                    durationMs = existing?.durationMs ?: 0,
+                    durationMs = resolveImportedSongDuration(
+                        filePath = stored.file.absolutePath,
+                        fallbackDurationMs = existing?.durationMs ?: 0L
+                    ),
                     fileName = stored.fileName,
                     mimeType = stored.mimeType,
                     localPath = stored.file.absolutePath,
@@ -661,6 +674,36 @@ class MusicViewModel(
             if (candidate !in existingNames) return candidate
             index++
         }
+    }
+
+    private suspend fun persistResolvedDuration(song: SongEntity?, durationMs: Long) {
+        val resolvedSong = song ?: return
+        val resolvedDurationMs = durationMs.coerceAtLeast(0L)
+        if (resolvedDurationMs <= 0L) return
+        if (resolvedSong.durationMs == resolvedDurationMs) return
+
+        repository.updateLocalSongDuration(resolvedSong.md5sum, resolvedDurationMs)
+        repository.updateRemoteSongDuration(resolvedSong.md5sum, resolvedDurationMs)
+    }
+
+    private fun resolveImportedSongDuration(filePath: String, fallbackDurationMs: Long): Long {
+        val extractedDurationMs = extractDurationMs(filePath)
+        return extractedDurationMs.takeIf { it > 0L } ?: fallbackDurationMs.coerceAtLeast(0L)
+    }
+
+    private fun extractDurationMs(filePath: String): Long {
+        return runCatching {
+            val retriever = MediaMetadataRetriever()
+            try {
+                retriever.setDataSource(filePath)
+                retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                    ?.toLongOrNull()
+                    ?.coerceAtLeast(0L)
+                    ?: 0L
+            } finally {
+                retriever.release()
+            }
+        }.getOrDefault(0L)
     }
 }
 

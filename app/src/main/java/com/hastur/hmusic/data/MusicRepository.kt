@@ -23,6 +23,14 @@ class MusicRepository(private val musicDao: MusicDao) {
         musicDao.insertRemoteSongs(songs)
     }
 
+    suspend fun updateLocalSongDuration(md5sum: String, durationMs: Long) {
+        musicDao.updateLocalSongDuration(md5sum, durationMs)
+    }
+
+    suspend fun updateRemoteSongDuration(md5sum: String, durationMs: Long) {
+        musicDao.updateRemoteSongDuration(md5sum, durationMs)
+    }
+
     suspend fun deleteLocalSong(song: SongEntity) {
         musicDao.deleteLocalSong(song)
     }

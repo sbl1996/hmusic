@@ -16,6 +16,7 @@ import android.media.session.MediaSession
 import android.media.session.PlaybackState
 import android.os.Build
 import android.os.IBinder
+import android.os.SystemClock
 import com.hastur.hmusic.MainActivity
 import com.hastur.hmusic.R
 import com.hastur.hmusic.data.SongEntity
@@ -23,7 +24,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
@@ -34,6 +34,7 @@ class PlaybackService : Service() {
     private var currentSong: SongEntity? = null
     private var isPlaying: Boolean = false
     private var currentPositionMs: Long = 0L
+    private var currentDurationMs: Long = 0L
 
     override fun onCreate() {
         super.onCreate()
@@ -74,6 +75,12 @@ class PlaybackService : Service() {
             }
         }
         serviceScope.launch {
+            playerManager.duration.collectLatest { durationMs ->
+                currentDurationMs = durationMs.coerceAtLeast(0L)
+                updateSessionMetadata(currentSong)
+            }
+        }
+        serviceScope.launch {
             playerManager.isPlaying.collectLatest { playing ->
                 isPlaying = playing
                 updatePlaybackState()
@@ -81,10 +88,9 @@ class PlaybackService : Service() {
             }
         }
         serviceScope.launch {
-            while (true) {
-                currentPositionMs = playerManager.currentPosition.value
+            playerManager.currentPosition.collectLatest { positionMs ->
+                currentPositionMs = positionMs.coerceAtLeast(0L)
                 updatePlaybackState()
-                delay(1000)
             }
         }
     }
@@ -191,7 +197,12 @@ class PlaybackService : Service() {
         mediaSession.setPlaybackState(
             PlaybackState.Builder()
                 .setActions(actions)
-                .setState(state, currentPositionMs, if (isPlaying) 1f else 0f)
+                .setState(
+                    state,
+                    currentPositionMs,
+                    if (isPlaying) 1f else 0f,
+                    SystemClock.elapsedRealtime()
+                )
                 .build()
         )
     }
@@ -205,10 +216,14 @@ class PlaybackService : Service() {
         val metadataBuilder = MediaMetadata.Builder()
             .putString(MediaMetadata.METADATA_KEY_TITLE, song.title)
             .putString(MediaMetadata.METADATA_KEY_ARTIST, song.artist)
-            .putLong(MediaMetadata.METADATA_KEY_DURATION, song.durationMs)
+            .putLong(MediaMetadata.METADATA_KEY_DURATION, resolvedDuration(song))
 
         extractArtwork(song.localPath)?.let { metadataBuilder.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, it) }
         mediaSession.setMetadata(metadataBuilder.build())
+    }
+
+    private fun resolvedDuration(song: SongEntity): Long {
+        return currentDurationMs.takeIf { it > 0L } ?: song.durationMs.coerceAtLeast(0L)
     }
 
     private fun extractArtwork(localPath: String): Bitmap? {

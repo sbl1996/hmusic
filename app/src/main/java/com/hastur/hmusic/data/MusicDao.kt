@@ -20,6 +20,12 @@ interface MusicDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertRemoteSongs(songs: List<RemoteSongEntity>)
 
+    @Query("UPDATE songs SET durationMs = :durationMs WHERE md5sum = :md5sum AND durationMs != :durationMs")
+    suspend fun updateLocalSongDuration(md5sum: String, durationMs: Long)
+
+    @Query("UPDATE remote_songs SET durationMs = :durationMs WHERE md5sum = :md5sum AND durationMs != :durationMs")
+    suspend fun updateRemoteSongDuration(md5sum: String, durationMs: Long)
+
     @Delete
     suspend fun deleteLocalSong(song: SongEntity)
 
