@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -84,6 +85,7 @@ fun MusicPlayerScreen(
     var pickedUri by remember { mutableStateOf("") }
     var inputTitle by remember { mutableStateOf("") }
     var inputArtist by remember { mutableStateOf("") }
+    var isPlaylistExpanded by rememberSaveable { mutableStateOf(true) }
 
     // Audio file picker launcher
     val filePickerLauncher = rememberLauncherForActivityResult(
@@ -272,127 +274,18 @@ fun MusicPlayerScreen(
                         .weight(1f)
                         .fillMaxWidth()
                 ) {
-                // Turntable cover
-                    BoxWithConstraints(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1.2f)
-                            .padding(vertical = 12.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        val currentSongName = currentSong?.title ?: "无正在播放的歌曲"
-                        val artworkFrameSize = minOf(maxWidth * 0.62f, maxHeight * 0.68f, 240.dp)
-                        val backgroundGlowSize = artworkFrameSize * 0.83f
-                        val glassCardSize = artworkFrameSize * 0.825f
-                        val vinylSize = artworkFrameSize * 0.71f
-                        val artworkSize = artworkFrameSize * 0.46f
-
-                        Column(
-                            modifier = Modifier.fillMaxSize(),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterVertically)
-                        ) {
-                            Box(
-                                modifier = Modifier.size(artworkFrameSize),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                // Background ambient glow
-                                Box(
-                                    modifier = Modifier
-                                        .size(backgroundGlowSize)
-                                        .rotate(6f)
-                                        .background(
-                                            Brush.linearGradient(
-                                                colors = listOf(Color(0xFF381E72), Color(0xFFD0BCFF))
-                                            ),
-                                            shape = RoundedCornerShape(24.dp)
-                                        )
-                                        .clip(RoundedCornerShape(24.dp))
-                                        .align(Alignment.Center)
-                                )
-
-                                // Frosted Glass container overlay
-                                Box(
-                                    modifier = Modifier
-                                        .size(glassCardSize)
-                                        .background(
-                                            color = Color(0x3D000000),
-                                            shape = RoundedCornerShape(24.dp)
-                                        )
-                                        .background(
-                                            Brush.verticalGradient(
-                                                colors = listOf(Color(0x33FFFFFF), Color(0x0EFFFFFF))
-                                            ),
-                                            shape = RoundedCornerShape(24.dp)
-                                        )
-                                        .border(
-                                            width = 1.dp,
-                                            brush = Brush.verticalGradient(
-                                                colors = listOf(Color(0x33FFFFFF), Color(0x0FFFFFFF))
-                                            ),
-                                            shape = RoundedCornerShape(24.dp)
-                                        )
-                                        .clip(RoundedCornerShape(24.dp))
-                                        .align(Alignment.Center),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    // Beautiful inner vinyl disk that spins
-                                    Box(
-                                        modifier = Modifier
-                                            .size(vinylSize * breathingScale)
-                                            .rotate(if (isPlaying) spinningAngle else 0f),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        // Vinyl plate drawings
-                                        Canvas(modifier = Modifier.fillMaxSize()) {
-                                            // Outer vinyl plate
-                                            drawCircle(color = Color(0xFF131318), radius = size.width / 2.0f)
-                                            // Ring grooves for reflection
-                                            drawCircle(color = Color(0x22FFFFFF), radius = size.width / 2.2f, style = Stroke(1.0f))
-                                            drawCircle(color = Color(0x12909094), radius = size.width / 2.5f, style = Stroke(1.5f))
-                                            drawCircle(color = Color(0x12FFFFFF), radius = size.width / 3.0f, style = Stroke(1.5f))
-                                        }
-
-                                        ArtworkDisc(
-                                            filePath = currentSong?.localPath,
-                                            modifier = Modifier.size(artworkSize),
-                                            accentColor = accentNeonColor,
-                                            placeholderIcon = Icons.Filled.MusicNote,
-                                            placeholderDescription = "Spinning disk icon"
-                                        )
-                                    }
-                                }
-                            }
-
-                            // Custom labels
-                            Text(
-                                text = currentSongName,
-                                color = textWhite,
-                                fontSize = 18.sp,
-                                fontWeight = FontWeight.Bold,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                textAlign = TextAlign.Center,
-                                modifier = Modifier.padding(horizontal = 24.dp)
-                            )
-                            Text(
-                                text = currentSong?.artist ?: "请从下方列表挑选音轨",
-                                color = accentNeonColor,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Normal,
-                                lineHeight = 18.sp,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                textAlign = TextAlign.Center,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 24.dp),
-                                style = LocalTextStyle.current.copy(
-                                    platformStyle = PlatformTextStyle(includeFontPadding = false)
-                                )
-                            )
-                        }
-                    }
+                    PlayerArtworkSection(
+                        modifier = Modifier.weight(if (isPlaylistExpanded) 1.2f else 2.05f),
+                        currentSongTitle = currentSong?.title ?: "无正在播放的歌曲",
+                        currentSongArtist = currentSong?.artist ?: "请从下方列表挑选音轨",
+                        currentSongLocalPath = currentSong?.localPath,
+                        isPlaying = isPlaying,
+                        spinningAngle = spinningAngle,
+                        breathingScale = breathingScale,
+                        isPlaylistExpanded = isPlaylistExpanded,
+                        accentColor = accentNeonColor,
+                        textWhite = textWhite
+                    )
                 // Error message if any
                 playerError?.let { err ->
                     Text(
@@ -425,78 +318,39 @@ fun MusicPlayerScreen(
                     onPrev = { viewModel.playPrevious() },
                     onNext = { viewModel.playNext() },
                     onToggleLoop = { viewModel.toggleLoopMode() },
+                    isPlaylistExpanded = isPlaylistExpanded,
+                    onTogglePlaylist = { isPlaylistExpanded = !isPlaylistExpanded },
                     accentColor = accentNeonColor,
-                    cardBackground = Color(0x1F44474E),
                     textWhite = textWhite
                 )
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                // 4. Playlist catalog
-                Text(
-                    text = "播放列表 (${songs.size})",
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = textWhite,
-                    letterSpacing = 0.5.sp,
-                    modifier = Modifier.padding(bottom = 6.dp)
-                )
-
-                if (songs.isEmpty()) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(120.dp)
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(Color(0x0AFFFFFF))
-                            .border(1.dp, Color(0x0FFFFFFF), RoundedCornerShape(16.dp)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = "还没有歌曲，导入本地音频或先同步云端歌单",
-                            color = textDim,
-                            fontSize = 13.sp,
-                            textAlign = TextAlign.Center
-                        )
-                    }
-                } else {
-                    LazyColumn(
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        items(songs) { song ->
-                            val isActive = currentSong?.md5sum == song.md5sum
-                            val transferState = transferStates[song.md5sum] ?: SongTransferState.Idle
-                            SongItemRow(
-                                song = song,
-                                isActive = isActive,
-                                isPlayingResponse = isPlaying && isActive,
-                                transferState = transferState,
-                                onSelection = {
-                                    if (transferState is SongTransferState.Running) {
-                                        Unit
-                                    } else if (song.isDownloaded) {
-                                        if (song.canBackup) {
-                                            viewModel.uploadSong(song)
-                                        } else {
-                                            viewModel.playSong(song)
-                                        }
-                                    } else {
-                                        viewModel.downloadSong(song)
-                                    }
-                                },
-                                onDelete = { viewModel.deleteSong(song) },
-                                cardBg = Color(0x09FFFFFF),
-                                activeBg = Color(0x24D0BCFF),
-                                accentColor = accentNeonColor,
-                                textWhite = textWhite,
-                                textDim = textDim
-                            )
+                PlaylistSection(
+                    songs = songs,
+                    currentSongMd5 = currentSong?.md5sum,
+                    isPlaying = isPlaying,
+                    transferStates = transferStates,
+                    isExpanded = isPlaylistExpanded,
+                    onToggleExpanded = { isPlaylistExpanded = !isPlaylistExpanded },
+                    onSelection = { song, transferState ->
+                        if (transferState is SongTransferState.Running) {
+                            Unit
+                        } else if (song.isDownloaded) {
+                            if (song.canBackup) {
+                                viewModel.uploadSong(song)
+                            } else {
+                                viewModel.playSong(song)
+                            }
+                        } else {
+                            viewModel.downloadSong(song)
                         }
-                    }
-                }
+                    },
+                    onDelete = viewModel::deleteSong,
+                    accentColor = accentNeonColor,
+                    textWhite = textWhite,
+                    textDim = textDim
+                )
                 Spacer(modifier = Modifier.height(8.dp))
             }
             }
@@ -1056,8 +910,9 @@ fun PlaybackControlsRow(
     onPrev: () -> Unit,
     onNext: () -> Unit,
     onToggleLoop: () -> Unit,
+    isPlaylistExpanded: Boolean,
+    onTogglePlaylist: () -> Unit,
     accentColor: Color,
-    cardBackground: Color,
     textWhite: Color
 ) {
     Row(
@@ -1143,22 +998,262 @@ fun PlaybackControlsRow(
             )
         }
 
-        // Label representing LoopMode
-        Box(
+        IconButton(
+            onClick = { onTogglePlaylist() },
             modifier = Modifier
                 .size(40.dp)
                 .clip(CircleShape)
                 .background(Color(0x13FFFFFF))
-                .border(1.dp, Color(0x1AFFFFFF), CircleShape),
-            contentAlignment = Alignment.Center
+                .border(1.dp, Color(0x1AFFFFFF), CircleShape)
+                .testTag("playlist_toggle_button")
         ) {
-            Text(
-                text = if (loopMode == LoopMode.SINGLE) "单曲" else "列表",
-                color = accentColor,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Bold,
-                fontFamily = FontFamily.Monospace
+            Icon(
+                imageVector = if (isPlaylistExpanded) Icons.Filled.ExpandMore else Icons.Filled.QueueMusic,
+                contentDescription = if (isPlaylistExpanded) "Collapse playlist" else "Expand playlist",
+                tint = accentColor,
+                modifier = Modifier.size(20.dp)
             )
+        }
+    }
+}
+
+@Composable
+private fun PlayerArtworkSection(
+    modifier: Modifier = Modifier,
+    currentSongTitle: String,
+    currentSongArtist: String,
+    currentSongLocalPath: String?,
+    isPlaying: Boolean,
+    spinningAngle: Float,
+    breathingScale: Float,
+    isPlaylistExpanded: Boolean,
+    accentColor: Color,
+    textWhite: Color
+) {
+    BoxWithConstraints(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = if (isPlaylistExpanded) 12.dp else 6.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        val artworkFrameSize = if (isPlaylistExpanded) {
+            minOf(maxWidth * 0.62f, maxHeight * 0.68f, 240.dp)
+        } else {
+            minOf(maxWidth * 0.88f, maxHeight * 0.9f, 360.dp)
+        }
+        val backgroundGlowSize = artworkFrameSize * 0.83f
+        val glassCardSize = artworkFrameSize * 0.825f
+        val vinylSize = artworkFrameSize * 0.71f
+        val artworkSize = artworkFrameSize * 0.46f
+
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(if (isPlaylistExpanded) 10.dp else 14.dp, Alignment.CenterVertically)
+        ) {
+            Box(
+                modifier = Modifier.size(artworkFrameSize),
+                contentAlignment = Alignment.Center
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(backgroundGlowSize)
+                        .rotate(6f)
+                        .background(
+                            Brush.linearGradient(
+                                colors = listOf(Color(0xFF381E72), Color(0xFFD0BCFF))
+                            ),
+                            shape = RoundedCornerShape(24.dp)
+                        )
+                        .clip(RoundedCornerShape(24.dp))
+                        .align(Alignment.Center)
+                )
+
+                Box(
+                    modifier = Modifier
+                        .size(glassCardSize)
+                        .background(
+                            color = Color(0x3D000000),
+                            shape = RoundedCornerShape(24.dp)
+                        )
+                        .background(
+                            Brush.verticalGradient(
+                                colors = listOf(Color(0x33FFFFFF), Color(0x0EFFFFFF))
+                            ),
+                            shape = RoundedCornerShape(24.dp)
+                        )
+                        .border(
+                            width = 1.dp,
+                            brush = Brush.verticalGradient(
+                                colors = listOf(Color(0x33FFFFFF), Color(0x0FFFFFFF))
+                            ),
+                            shape = RoundedCornerShape(24.dp)
+                        )
+                        .clip(RoundedCornerShape(24.dp))
+                        .align(Alignment.Center),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(vinylSize * breathingScale)
+                            .rotate(if (isPlaying) spinningAngle else 0f),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Canvas(modifier = Modifier.fillMaxSize()) {
+                            drawCircle(color = Color(0xFF131318), radius = size.width / 2.0f)
+                            drawCircle(color = Color(0x22FFFFFF), radius = size.width / 2.2f, style = Stroke(1.0f))
+                            drawCircle(color = Color(0x12909094), radius = size.width / 2.5f, style = Stroke(1.5f))
+                            drawCircle(color = Color(0x12FFFFFF), radius = size.width / 3.0f, style = Stroke(1.5f))
+                        }
+
+                        ArtworkDisc(
+                            filePath = currentSongLocalPath,
+                            modifier = Modifier.size(artworkSize),
+                            accentColor = accentColor,
+                            placeholderIcon = Icons.Filled.MusicNote,
+                            placeholderDescription = "Spinning disk icon"
+                        )
+                    }
+                }
+            }
+
+            Text(
+                text = currentSongTitle,
+                color = textWhite,
+                fontSize = if (isPlaylistExpanded) 18.sp else 22.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(horizontal = 24.dp)
+            )
+            Text(
+                text = currentSongArtist,
+                color = accentColor,
+                fontSize = if (isPlaylistExpanded) 13.sp else 14.sp,
+                fontWeight = FontWeight.Normal,
+                lineHeight = 18.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp),
+                style = LocalTextStyle.current.copy(
+                    platformStyle = PlatformTextStyle(includeFontPadding = false)
+                )
+            )
+        }
+    }
+}
+
+@Composable
+private fun PlaylistSection(
+    songs: List<LibrarySongItem>,
+    currentSongMd5: String?,
+    isPlaying: Boolean,
+    transferStates: Map<String, SongTransferState>,
+    isExpanded: Boolean,
+    onToggleExpanded: () -> Unit,
+    onSelection: (LibrarySongItem, SongTransferState) -> Unit,
+    onDelete: (LibrarySongItem) -> Unit,
+    accentColor: Color,
+    textWhite: Color,
+    textDim: Color
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .animateContentSize(),
+        shape = RoundedCornerShape(20.dp),
+        color = Color(0x0AFFFFFF),
+        border = BorderStroke(1.dp, Color(0x10FFFFFF))
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onToggleExpanded() }
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.QueueMusic,
+                        contentDescription = null,
+                        tint = accentColor,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Text(
+                        text = "播放列表 (${songs.size})",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = textWhite,
+                        letterSpacing = 0.5.sp
+                    )
+                }
+                Icon(
+                    imageVector = if (isExpanded) Icons.Filled.ExpandMore else Icons.Filled.ChevronRight,
+                    contentDescription = null,
+                    tint = accentColor
+                )
+            }
+
+            AnimatedVisibility(
+                visible = isExpanded,
+                enter = fadeIn() + expandVertically(),
+                exit = fadeOut() + shrinkVertically()
+            ) {
+                if (songs.isEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(120.dp)
+                            .padding(start = 12.dp, end = 12.dp, bottom = 12.dp)
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(Color(0x08FFFFFF))
+                            .border(1.dp, Color(0x0FFFFFFF), RoundedCornerShape(16.dp)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "还没有歌曲，导入本地音频或先同步云端歌单",
+                            color = textDim,
+                            fontSize = 13.sp,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier
+                            .heightIn(max = 320.dp)
+                            .fillMaxWidth()
+                            .padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(songs) { song ->
+                            val isActive = currentSongMd5 == song.md5sum
+                            val transferState = transferStates[song.md5sum] ?: SongTransferState.Idle
+                            SongItemRow(
+                                song = song,
+                                isActive = isActive,
+                                isPlayingResponse = isPlaying && isActive,
+                                transferState = transferState,
+                                onSelection = { onSelection(song, transferState) },
+                                onDelete = { onDelete(song) },
+                                cardBg = Color(0x09FFFFFF),
+                                activeBg = Color(0x24D0BCFF),
+                                accentColor = accentColor,
+                                textWhite = textWhite,
+                                textDim = textDim
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 }
