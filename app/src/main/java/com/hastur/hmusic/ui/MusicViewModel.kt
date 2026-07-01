@@ -57,6 +57,9 @@ data class LibrarySongItem(
 
     val canDownload: Boolean
         get() = remoteSong != null && !isDownloaded
+
+    val canBackup: Boolean
+        get() = localSong?.isDownloaded == true && remoteSong == null
 }
 
 sealed class StatusMessageState {
@@ -66,17 +69,26 @@ sealed class StatusMessageState {
     data class Error(val message: String) : StatusMessageState()
 }
 
-sealed class SongDownloadState {
-    object Idle : SongDownloadState()
-    data class Downloading(
+enum class SongTransferDirection {
+    DOWNLOAD,
+    UPLOAD
+}
+
+sealed class SongTransferState {
+    object Idle : SongTransferState()
+    data class Running(
+        val direction: SongTransferDirection,
         val bytesRead: Long,
         val totalBytes: Long?
-    ) : SongDownloadState() {
+    ) : SongTransferState() {
         val progress: Float?
             get() = totalBytes?.takeIf { it > 0 }?.let { bytesRead.toFloat() / it.toFloat() }
     }
 
-    data class Failed(val message: String) : SongDownloadState()
+    data class Failed(
+        val direction: SongTransferDirection,
+        val message: String
+    ) : SongTransferState()
 }
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -95,8 +107,8 @@ class MusicViewModel(
     private val _statusMessageState = MutableStateFlow<StatusMessageState>(StatusMessageState.Idle)
     val statusMessageState: StateFlow<StatusMessageState> = _statusMessageState.asStateFlow()
 
-    private val _downloadStates = MutableStateFlow<Map<String, SongDownloadState>>(emptyMap())
-    val downloadStates: StateFlow<Map<String, SongDownloadState>> = _downloadStates.asStateFlow()
+    private val _transferStates = MutableStateFlow<Map<String, SongTransferState>>(emptyMap())
+    val transferStates: StateFlow<Map<String, SongTransferState>> = _transferStates.asStateFlow()
 
     val localSongs: StateFlow<List<SongEntity>> = repository.localSongs
         .stateIn(
@@ -173,7 +185,7 @@ class MusicViewModel(
         viewModelScope.launch {
             activeProfile.collect { profile ->
                 ossClient?.close()
-                _downloadStates.value = emptyMap()
+                _transferStates.value = emptyMap()
                 ossClient = if (profile != null && profile.endpoint.isNotEmpty()) {
                     OssClient(
                         endpoint = profile.endpoint,
@@ -225,10 +237,12 @@ class MusicViewModel(
             return
         }
         val songKey = remoteSong.md5sum.ifBlank { song.md5sum }
-        if (_downloadStates.value[songKey] is SongDownloadState.Downloading) {
+        if (_transferStates.value[songKey] is SongTransferState.Running) {
             return
         }
-        _downloadStates.update { it + (songKey to SongDownloadState.Downloading(bytesRead = 0L, totalBytes = null)) }
+        _transferStates.update {
+            it + (songKey to SongTransferState.Running(SongTransferDirection.DOWNLOAD, bytesRead = 0L, totalBytes = null))
+        }
 
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -239,8 +253,14 @@ class MusicViewModel(
                         inputStream = it,
                         totalBytes = remoteStream.contentLength,
                         onProgress = { bytesRead, totalBytes ->
-                            _downloadStates.update { states ->
-                                states + (songKey to SongDownloadState.Downloading(bytesRead, totalBytes))
+                            _transferStates.update { states ->
+                                states + (
+                                    songKey to SongTransferState.Running(
+                                        SongTransferDirection.DOWNLOAD,
+                                        bytesRead,
+                                        totalBytes
+                                    )
+                                )
                             }
                         }
                     )
@@ -263,16 +283,106 @@ class MusicViewModel(
                     syncTime = System.currentTimeMillis()
                 )
                 repository.insertLocalSong(local)
-                _downloadStates.update { it - songKey }
+                _transferStates.update { it - songKey }
                 _statusMessageState.value = StatusMessageState.Completed("已同步到本地：${local.title}")
             } catch (e: Exception) {
-                _downloadStates.update {
-                    it + (songKey to SongDownloadState.Failed(e.localizedMessage ?: "未知错误"))
+                _transferStates.update {
+                    it + (
+                        songKey to SongTransferState.Failed(
+                            SongTransferDirection.DOWNLOAD,
+                            e.localizedMessage ?: "未知错误"
+                        )
+                    )
                 }
                 _statusMessageState.value = StatusMessageState.Error("下载歌曲失败: ${e.localizedMessage}")
                 delay(2500)
-                _downloadStates.update { states ->
-                    if (states[songKey] is SongDownloadState.Failed) states - songKey else states
+                _transferStates.update { states ->
+                    if (states[songKey] is SongTransferState.Failed) states - songKey else states
+                }
+            }
+        }
+    }
+
+    fun uploadSong(song: LibrarySongItem) {
+        val profile = activeProfile.value
+        val client = ossClient
+        val localSong = song.localSong
+        if (profile == null || client == null) {
+            _statusMessageState.value = StatusMessageState.Error("请先配置有效的 S3 / OSS Profile")
+            return
+        }
+        if (localSong == null || !localSong.isDownloaded) {
+            _statusMessageState.value = StatusMessageState.Error("当前歌曲未下载到本地")
+            return
+        }
+        val songKey = localSong.md5sum.ifBlank { song.md5sum }
+        if (_transferStates.value[songKey] is SongTransferState.Running) {
+            return
+        }
+        _transferStates.update {
+            it + (songKey to SongTransferState.Running(SongTransferDirection.UPLOAD, bytesRead = 0L, totalBytes = localSongFileSize(localSong)))
+        }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val localFile = File(localSong.localPath)
+                if (!localFile.exists()) {
+                    error("本地文件不存在")
+                }
+
+                val now = System.currentTimeMillis()
+                val remoteSong = buildRemoteSongEntity(profile.id, localSong, client, now)
+                client.uploadSongFile(
+                    remoteKey = remoteSong.remoteKey,
+                    file = localFile,
+                    mimeType = localSong.mimeType
+                )
+                _transferStates.update {
+                    it + (
+                        songKey to SongTransferState.Running(
+                            SongTransferDirection.UPLOAD,
+                            bytesRead = localFile.length(),
+                            totalBytes = localFile.length()
+                        )
+                    )
+                }
+
+                val mergedRemoteSongs = mergeRemoteSongs(
+                    profileId = profile.id,
+                    incomingSong = remoteSong,
+                    currentRemoteSongs = remoteSongs.value,
+                    manifest = loadManifest(client)
+                )
+
+                val manifestJson = manifestAdapter.toJson(
+                    CloudPlaylistManifest(
+                        version = 1,
+                        updatedAt = now,
+                        songs = mergedRemoteSongs.map { CloudSong.fromRemoteSong(it) }
+                    )
+                )
+                val success = client.uploadManifest(manifestJson)
+                if (!success) {
+                    error("云端索引写入失败")
+                }
+
+                repository.replaceRemoteSongs(profile.id, mergedRemoteSongs)
+                touchProfileLastSync(profile, now)
+                _transferStates.update { it - songKey }
+                _statusMessageState.value = StatusMessageState.Completed("已备份到云端：${localSong.title}")
+            } catch (e: Exception) {
+                _transferStates.update {
+                    it + (
+                        songKey to SongTransferState.Failed(
+                            SongTransferDirection.UPLOAD,
+                            e.localizedMessage ?: "未知错误"
+                        )
+                    )
+                }
+                _statusMessageState.value = StatusMessageState.Error("上传歌曲失败: ${e.localizedMessage}")
+                delay(2500)
+                _transferStates.update { states ->
+                    if (states[songKey] is SongTransferState.Failed) states - songKey else states
                 }
             }
         }
@@ -589,6 +699,53 @@ class MusicViewModel(
     private suspend fun loadManifest(client: OssClient): CloudPlaylistManifest? {
         val json = client.downloadManifest() ?: return null
         return manifestAdapter.fromJson(json)
+    }
+
+    private fun buildRemoteSongEntity(
+        profileId: Long,
+        localSong: SongEntity,
+        client: OssClient,
+        updatedAt: Long
+    ): RemoteSongEntity {
+        val remoteKey = client.buildRemoteAudioKey(
+            localSong.md5sum,
+            localSong.fileName.ifBlank { File(localSong.localPath).name }
+        )
+        return RemoteSongEntity(
+            profileId = profileId,
+            md5sum = localSong.md5sum,
+            title = localSong.title,
+            artist = localSong.artist,
+            durationMs = localSong.durationMs,
+            fileName = localSong.fileName,
+            mimeType = localSong.mimeType,
+            remoteKey = remoteKey,
+            manifestUpdatedAt = maxOf(localSong.localUpdatedAt, updatedAt),
+            syncTime = updatedAt
+        )
+    }
+
+    private fun mergeRemoteSongs(
+        profileId: Long,
+        incomingSong: RemoteSongEntity,
+        currentRemoteSongs: List<RemoteSongEntity>,
+        manifest: CloudPlaylistManifest?
+    ): List<RemoteSongEntity> {
+        val mergedByMd5 = linkedMapOf<String, RemoteSongEntity>()
+        manifest?.songs
+            ?.map { it.toRemoteSongEntity(profileId) }
+            ?.forEach { mergedByMd5[it.md5sum] = it }
+        currentRemoteSongs.forEach { mergedByMd5[it.md5sum] = it }
+        mergedByMd5[incomingSong.md5sum] = incomingSong
+        return mergedByMd5.values.toList()
+    }
+
+    private fun localSongFileSize(song: SongEntity): Long? {
+        return song.localPath.takeIf { it.isNotBlank() }
+            ?.let(::File)
+            ?.takeIf(File::exists)
+            ?.length()
+            ?.takeIf { it > 0L }
     }
 
     private suspend fun restorePlaybackState() {

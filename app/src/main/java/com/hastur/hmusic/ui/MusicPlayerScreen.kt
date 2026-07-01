@@ -69,7 +69,7 @@ fun MusicPlayerScreen(
     val backupProfiles by viewModel.backupProfiles.collectAsState()
     val activeProfile by viewModel.activeProfile.collectAsState()
     val statusMessageState by viewModel.statusMessageState.collectAsState()
-    val downloadStates by viewModel.downloadStates.collectAsState()
+    val transferStates by viewModel.transferStates.collectAsState()
 
     val currentSong by viewModel.currentSong.collectAsState()
     val isPlaying by viewModel.isPlaying.collectAsState()
@@ -468,17 +468,21 @@ fun MusicPlayerScreen(
                     ) {
                         items(songs) { song ->
                             val isActive = currentSong?.md5sum == song.md5sum
-                            val downloadState = downloadStates[song.md5sum] ?: SongDownloadState.Idle
+                            val transferState = transferStates[song.md5sum] ?: SongTransferState.Idle
                             SongItemRow(
                                 song = song,
                                 isActive = isActive,
                                 isPlayingResponse = isPlaying && isActive,
-                                downloadState = downloadState,
+                                transferState = transferState,
                                 onSelection = {
-                                    if (downloadState is SongDownloadState.Downloading) {
+                                    if (transferState is SongTransferState.Running) {
                                         Unit
                                     } else if (song.isDownloaded) {
-                                        viewModel.playSong(song)
+                                        if (song.canBackup) {
+                                            viewModel.uploadSong(song)
+                                        } else {
+                                            viewModel.playSong(song)
+                                        }
                                     } else {
                                         viewModel.downloadSong(song)
                                     }
@@ -689,7 +693,7 @@ fun SongItemRow(
     song: LibrarySongItem,
     isActive: Boolean,
     isPlayingResponse: Boolean,
-    downloadState: SongDownloadState,
+    transferState: SongTransferState,
     onSelection: () -> Unit,
     onDelete: () -> Unit,
     cardBg: Color,
@@ -698,10 +702,11 @@ fun SongItemRow(
     textWhite: Color,
     textDim: Color
 ) {
-    val isDownloading = downloadState is SongDownloadState.Downloading
+    val isRunning = transferState is SongTransferState.Running
     val actionIcon = when {
         isPlayingResponse -> Icons.Filled.Equalizer
         song.isDownloaded -> Icons.Filled.Audiotrack
+        song.canBackup -> Icons.Filled.CloudUpload
         song.canDownload -> Icons.Filled.CloudDownload
         else -> Icons.Filled.Warning
     }
@@ -714,7 +719,7 @@ fun SongItemRow(
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(enabled = !isDownloading) { onSelection() }
+            .clickable(enabled = !isRunning) { onSelection() }
             .testTag("song_item_${song.title}"),
         shape = RoundedCornerShape(16.dp),
         color = if (isActive) Color(0x24D0BCFF) else Color(0x09FFFFFF),
@@ -788,37 +793,29 @@ fun SongItemRow(
                 }
             }
 
-            // Quick play indicator or Delete action
-            if (isActive) {
-                Icon(
-                    imageVector = if (isPlayingResponse) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                    contentDescription = "Quick action",
-                    tint = accentColor,
-                    modifier = Modifier
-                        .size(24.dp)
-                        .padding(end = 4.dp)
+            Spacer(modifier = Modifier.width(8.dp))
+            if (isRunning || transferState is SongTransferState.Failed || song.canDownload || song.canBackup) {
+                TransferActionIndicator(
+                    state = transferState,
+                    defaultDirection = when {
+                        song.canBackup -> SongTransferDirection.UPLOAD
+                        else -> SongTransferDirection.DOWNLOAD
+                    },
+                    accentColor = accentColor,
+                    errorColor = Color(0xFFFF6B6B),
+                    modifier = Modifier.size(24.dp)
                 )
             } else {
-                Spacer(modifier = Modifier.width(8.dp))
-                if (isDownloading || downloadState is SongDownloadState.Failed || song.canDownload) {
-                    DownloadActionIndicator(
-                        state = downloadState,
-                        accentColor = accentColor,
-                        errorColor = Color(0xFFFF6B6B),
-                        modifier = Modifier.size(24.dp)
+                IconButton(
+                    onClick = { onDelete() },
+                    modifier = Modifier.size(24.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Delete,
+                        contentDescription = "Remove track",
+                        tint = textDim.copy(alpha = 0.6f),
+                        modifier = Modifier.size(16.dp)
                     )
-                } else {
-                    IconButton(
-                        onClick = { onDelete() },
-                        modifier = Modifier.size(24.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.Delete,
-                            contentDescription = "Remove track",
-                            tint = textDim.copy(alpha = 0.6f),
-                            modifier = Modifier.size(16.dp)
-                        )
-                    }
                 }
             }
         }
@@ -826,8 +823,9 @@ fun SongItemRow(
 }
 
 @Composable
-private fun DownloadActionIndicator(
-    state: SongDownloadState,
+private fun TransferActionIndicator(
+    state: SongTransferState,
+    defaultDirection: SongTransferDirection,
     accentColor: Color,
     errorColor: Color,
     modifier: Modifier = Modifier
@@ -837,7 +835,7 @@ private fun DownloadActionIndicator(
         contentAlignment = Alignment.Center
     ) {
         when (state) {
-            is SongDownloadState.Downloading -> {
+            is SongTransferState.Running -> {
                 val progress = state.progress?.coerceIn(0f, 1f)
                 if (progress != null) {
                     CircularProgressIndicator(
@@ -857,19 +855,19 @@ private fun DownloadActionIndicator(
                 }
             }
 
-            is SongDownloadState.Failed -> {
+            is SongTransferState.Failed -> {
                 Icon(
                     imageVector = Icons.Filled.Warning,
-                    contentDescription = "Download failed",
+                    contentDescription = if (state.direction == SongTransferDirection.UPLOAD) "Upload failed" else "Download failed",
                     tint = errorColor,
                     modifier = Modifier.size(18.dp)
                 )
             }
 
-            SongDownloadState.Idle -> {
+            SongTransferState.Idle -> {
                 Icon(
-                    imageVector = Icons.Filled.CloudDownload,
-                    contentDescription = "Download track",
+                    imageVector = if (defaultDirection == SongTransferDirection.UPLOAD) Icons.Filled.CloudUpload else Icons.Filled.CloudDownload,
+                    contentDescription = if (defaultDirection == SongTransferDirection.UPLOAD) "Upload track" else "Download track",
                     tint = accentColor,
                     modifier = Modifier.size(20.dp)
                 )
