@@ -1,9 +1,11 @@
 package com.hastur.hmusic.ui
 
+import android.content.ClipData
 import android.content.ClipboardManager
 import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
 import android.net.Uri
+import android.util.Base64
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -56,7 +58,13 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.hastur.hmusic.data.BackupProfileEntity
 import com.hastur.hmusic.player.LoopMode
+import java.nio.charset.StandardCharsets
 import java.util.Locale
+import java.security.MessageDigest
+import java.security.SecureRandom
+import javax.crypto.Cipher
+import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.spec.SecretKeySpec
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -86,6 +94,7 @@ fun MusicPlayerScreen(
     var inputTitle by remember { mutableStateOf("") }
     var inputArtist by remember { mutableStateOf("") }
     var isPlaylistExpanded by rememberSaveable { mutableStateOf(true) }
+    var pendingDeleteSong by remember { mutableStateOf<LibrarySongItem?>(null) }
 
     // Audio file picker launcher
     val filePickerLauncher = rememberLauncherForActivityResult(
@@ -346,7 +355,7 @@ fun MusicPlayerScreen(
                             viewModel.downloadSong(song)
                         }
                     },
-                    onDelete = viewModel::deleteSong,
+                    onDelete = { song -> pendingDeleteSong = song },
                     accentColor = accentNeonColor,
                     textWhite = textWhite,
                     textDim = textDim
@@ -355,6 +364,20 @@ fun MusicPlayerScreen(
             }
             }
         }
+    }
+
+    pendingDeleteSong?.let { song ->
+        ConfirmationDialog(
+            title = "确认删除歌曲",
+            message = "确定要删除「${song.title}」吗？此操作不可撤销。",
+            confirmLabel = "删除",
+            dismissLabel = "取消",
+            onConfirm = {
+                viewModel.deleteSong(song)
+                pendingDeleteSong = null
+            },
+            onDismiss = { pendingDeleteSong = null }
+        )
     }
 
     // Modal dialog to add a file
@@ -1279,6 +1302,9 @@ fun OssSettingsCard(
 ) {
     val context = LocalContext.current
     var profileMenuExpanded by remember { mutableStateOf(false) }
+    var showDeleteProfileConfirm by remember { mutableStateOf(false) }
+    var showBackupConfirm by remember { mutableStateOf(false) }
+    var showClearPlaylistConfirm by remember { mutableStateOf(false) }
     var profileName by remember(activeProfile) { mutableStateOf(activeProfile?.name ?: "") }
     var endpoint by remember(activeProfile) { mutableStateOf(activeProfile?.endpoint ?: "") }
     var region by remember(activeProfile) { mutableStateOf(activeProfile?.region ?: "") }
@@ -1574,6 +1600,26 @@ fun OssSettingsCard(
                 }
 
                 Button(
+                    onClick = onSync,
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0x14FFFFFF), contentColor = textWhite),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x1AFFFFFF)),
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(imageVector = Icons.Filled.Sync, contentDescription = "Sync manifest", modifier = Modifier.size(14.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("仅同步列表", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+
+                Button(
                     onClick = {
                         val clipboard = context.getSystemService(ClipboardManager::class.java)
                         val rawText = clipboard?.primaryClip
@@ -1582,7 +1628,13 @@ fun OssSettingsCard(
                             ?.coerceToText(context)
                             ?.toString()
                             .orEmpty()
-                        val parsed = parseEnvClipboardConfig(rawText)
+                        val clipboardText = decodeClipboardConfig(rawText)
+                        if (clipboardText == null) {
+                            onShowStatusError("剪贴板配置解密失败")
+                            Toast.makeText(context, "剪贴板配置解密失败", Toast.LENGTH_SHORT).show()
+                            return@Button
+                        }
+                        val parsed = parseEnvClipboardConfig(clipboardText.plainText)
                         if (parsed == null) {
                             onShowStatusError("剪贴板里没有可解析的 S3 配置")
                             Toast.makeText(context, "剪贴板里没有可解析的 S3 配置", Toast.LENGTH_SHORT).show()
@@ -1597,7 +1649,12 @@ fun OssSettingsCard(
                             if (profileName.isBlank()) {
                                 profileName = buildSuggestedProfileName(parsed)
                             }
-                            onShowStatusCompleted("已从剪贴板填充配置")
+                            val message = if (clipboardText.wasEncrypted) {
+                                "已解密并从剪贴板填充配置"
+                            } else {
+                                "已从剪贴板填充配置"
+                            }
+                            onShowStatusCompleted(message)
                         }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0x14FFFFFF), contentColor = textWhite),
@@ -1609,6 +1666,33 @@ fun OssSettingsCard(
                     Spacer(modifier = Modifier.width(4.dp))
                     Text("粘贴配置", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 }
+
+                Button(
+                    onClick = {
+                        val clipboard = context.getSystemService(ClipboardManager::class.java)
+                        val exportText = buildEnvClipboardConfig(
+                            endpoint = endpoint,
+                            region = region,
+                            forcePathStyle = forcePathStyle,
+                            bucket = bucket,
+                            accessKeyId = ak,
+                            accessKeySecret = sk,
+                            prefix = prefix
+                        )
+                        val encryptedText = encryptClipboardConfig(exportText)
+                        clipboard?.setPrimaryClip(ClipData.newPlainText("S3 Config", encryptedText))
+                        onShowStatusCompleted("加密配置已复制到剪贴板")
+                        Toast.makeText(context, "加密配置已复制到剪贴板", Toast.LENGTH_SHORT).show()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0x14FFFFFF), contentColor = textWhite),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x1AFFFFFF)),
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(imageVector = Icons.Filled.ContentCopy, contentDescription = "Copy config", modifier = Modifier.size(14.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("复制配置", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
             }
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -1618,7 +1702,7 @@ fun OssSettingsCard(
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Button(
-                    onClick = onBackup,
+                    onClick = { showBackupConfirm = true },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0x14FFFFFF), contentColor = textWhite),
                     border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x1AFFFFFF)),
                     modifier = Modifier
@@ -1632,40 +1716,7 @@ fun OssSettingsCard(
                 }
 
                 Button(
-                    onClick = onSyncPlaylist,
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0x14FFFFFF), contentColor = textWhite),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x1AFFFFFF)),
-                    modifier = Modifier
-                        .weight(1f)
-                        .testTag("cloud_sync_playlist_button"),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Icon(imageVector = Icons.Filled.CloudDownload, contentDescription = "Full sync", modifier = Modifier.size(14.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("完全同步", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                }
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Button(
-                    onClick = onSync,
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0x14FFFFFF), contentColor = textWhite),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x1AFFFFFF)),
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Icon(imageVector = Icons.Filled.Sync, contentDescription = "Sync manifest", modifier = Modifier.size(14.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("仅同步列表", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                }
-
-                Button(
-                    onClick = onClearPlaylist,
+                    onClick = { showClearPlaylistConfirm = true },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0x14FFFFFF), contentColor = textWhite),
                     border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x1AFFFFFF)),
                     modifier = Modifier
@@ -1682,7 +1733,7 @@ fun OssSettingsCard(
             Spacer(modifier = Modifier.height(12.dp))
 
             Button(
-                onClick = onDeleteProfile,
+                onClick = { showDeleteProfileConfirm = true },
                 enabled = profiles.size > 1,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = Color(0x33B3261E),
@@ -1702,6 +1753,48 @@ fun OssSettingsCard(
                 Text("删除当前配置", fontSize = 11.sp, fontWeight = FontWeight.Bold)
             }
         }
+    }
+
+    if (showBackupConfirm) {
+        ConfirmationDialog(
+            title = "确认备份到云端",
+            message = "确定要备份到当前配置「$profileName」吗？这会上传本地歌曲，并覆盖当前配置的云端歌单索引。",
+            confirmLabel = "继续备份",
+            dismissLabel = "取消",
+            onConfirm = {
+                onBackup()
+                showBackupConfirm = false
+            },
+            onDismiss = { showBackupConfirm = false }
+        )
+    }
+
+    if (showClearPlaylistConfirm) {
+        ConfirmationDialog(
+            title = "确认清空本地列表",
+            message = "确定要清空本地列表吗？这会删除本地歌曲记录并清除播放状态。",
+            confirmLabel = "清空",
+            dismissLabel = "取消",
+            onConfirm = {
+                onClearPlaylist()
+                showClearPlaylistConfirm = false
+            },
+            onDismiss = { showClearPlaylistConfirm = false }
+        )
+    }
+
+    if (showDeleteProfileConfirm) {
+        ConfirmationDialog(
+            title = "确认删除配置",
+            message = "确定要删除当前配置「$profileName」吗？此操作不可撤销。",
+            confirmLabel = "删除",
+            dismissLabel = "取消",
+            onConfirm = {
+                onDeleteProfile()
+                showDeleteProfileConfirm = false
+            },
+            onDismiss = { showDeleteProfileConfirm = false }
+        )
     }
 }
 
@@ -1800,6 +1893,32 @@ fun formatDuration(durationMs: Long): String {
     return String.format(Locale.ROOT, "%02d:%02d", mins, secs)
 }
 
+@Composable
+private fun ConfirmationDialog(
+    title: String,
+    message: String,
+    confirmLabel: String,
+    dismissLabel: String,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = { Text(message) },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text(confirmLabel)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(dismissLabel)
+            }
+        }
+    )
+}
+
 private data class ParsedEnvConfig(
     val endpoint: String? = null,
     val region: String? = null,
@@ -1808,6 +1927,11 @@ private data class ParsedEnvConfig(
     val accessKeyId: String? = null,
     val accessKeySecret: String? = null,
     val prefix: String? = null
+)
+
+private data class DecodedClipboardConfig(
+    val plainText: String,
+    val wasEncrypted: Boolean
 )
 
 private fun parseEnvClipboardConfig(text: String): ParsedEnvConfig? {
@@ -1867,4 +1991,88 @@ private fun buildSuggestedProfileName(config: ParsedEnvConfig): String {
         config.endpoint != null -> config.endpoint.removePrefix("https://").removePrefix("http://")
         else -> "配置"
     }
+}
+
+private const val ENCRYPTED_CONFIG_PREFIX = "HMUSIC_CFG_V1:"
+private const val CLIPBOARD_CIPHER_TRANSFORMATION = "AES/GCM/NoPadding"
+private const val CLIPBOARD_IV_SIZE_BYTES = 12
+private const val CLIPBOARD_TAG_SIZE_BITS = 128
+private const val CLIPBOARD_KEY_MATERIAL = "hmusic-config-share-v1::clipboard"
+
+private fun decodeClipboardConfig(text: String): DecodedClipboardConfig? {
+    if (!text.startsWith(ENCRYPTED_CONFIG_PREFIX)) {
+        return DecodedClipboardConfig(plainText = text, wasEncrypted = false)
+    }
+
+    val payload = text.removePrefix(ENCRYPTED_CONFIG_PREFIX)
+    val decodedBytes = try {
+        Base64.decode(payload, Base64.NO_WRAP)
+    } catch (_: IllegalArgumentException) {
+        return null
+    }
+
+    if (decodedBytes.size <= CLIPBOARD_IV_SIZE_BYTES) return null
+
+    val iv = decodedBytes.copyOfRange(0, CLIPBOARD_IV_SIZE_BYTES)
+    val cipherBytes = decodedBytes.copyOfRange(CLIPBOARD_IV_SIZE_BYTES, decodedBytes.size)
+
+    val plainBytes = try {
+        val cipher = Cipher.getInstance(CLIPBOARD_CIPHER_TRANSFORMATION)
+        cipher.init(
+            Cipher.DECRYPT_MODE,
+            clipboardSecretKey(),
+            GCMParameterSpec(CLIPBOARD_TAG_SIZE_BITS, iv)
+        )
+        cipher.doFinal(cipherBytes)
+    } catch (_: Exception) {
+        return null
+    }
+
+    return DecodedClipboardConfig(
+        plainText = plainBytes.toString(StandardCharsets.UTF_8),
+        wasEncrypted = true
+    )
+}
+
+private fun encryptClipboardConfig(text: String): String {
+    val iv = ByteArray(CLIPBOARD_IV_SIZE_BYTES)
+    SecureRandom().nextBytes(iv)
+
+    val cipher = Cipher.getInstance(CLIPBOARD_CIPHER_TRANSFORMATION)
+    cipher.init(
+        Cipher.ENCRYPT_MODE,
+        clipboardSecretKey(),
+        GCMParameterSpec(CLIPBOARD_TAG_SIZE_BITS, iv)
+    )
+
+    val cipherBytes = cipher.doFinal(text.toByteArray(StandardCharsets.UTF_8))
+    val payload = iv + cipherBytes
+    val encoded = Base64.encodeToString(payload, Base64.NO_WRAP)
+    return ENCRYPTED_CONFIG_PREFIX + encoded
+}
+
+private fun clipboardSecretKey(): SecretKeySpec {
+    val keyBytes = MessageDigest.getInstance("SHA-256")
+        .digest(CLIPBOARD_KEY_MATERIAL.toByteArray(StandardCharsets.UTF_8))
+    return SecretKeySpec(keyBytes, "AES")
+}
+
+private fun buildEnvClipboardConfig(
+    endpoint: String,
+    region: String,
+    forcePathStyle: Boolean,
+    bucket: String,
+    accessKeyId: String,
+    accessKeySecret: String,
+    prefix: String
+): String {
+    return listOf(
+        "S3_ENDPOINT=$endpoint",
+        "S3_REGION=$region",
+        "S3_FORCE_PATH_STYLE=$forcePathStyle",
+        "S3_BUCKET=$bucket",
+        "S3_ACCESS_KEY_ID=$accessKeyId",
+        "S3_SECRET_ACCESS_KEY=$accessKeySecret",
+        "S3_PREFIX=$prefix"
+    ).joinToString(separator = "\n")
 }
