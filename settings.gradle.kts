@@ -1,10 +1,6 @@
 pluginManagement {
   repositories {
     mavenLocal()
-    maven("http://depot.sankuai.com/nexus/content/groups/public/") {
-      isAllowInsecureProtocol = true
-    }
-    maven("https://pixel.sankuai.com/repository/mtdp")
     google {
       content {
         includeGroupByRegex("com\\.android.*")
@@ -23,10 +19,6 @@ dependencyResolutionManagement {
   repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
   repositories {
     mavenLocal()
-    maven("http://depot.sankuai.com/nexus/content/groups/public/") {
-      isAllowInsecureProtocol = true
-    }
-    maven("https://pixel.sankuai.com/repository/mtdp")
     google()
     mavenCentral()
   }
