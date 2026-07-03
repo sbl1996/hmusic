@@ -68,6 +68,7 @@ import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 @Composable
@@ -1302,10 +1303,13 @@ fun OssSettingsCard(
     textDim: Color
 ) {
     val context = LocalContext.current
+    val clipboardPromptStore = remember(context) { ClipboardConfigPromptStore(context) }
+    val coroutineScope = rememberCoroutineScope()
     var profileMenuExpanded by remember { mutableStateOf(false) }
     var showDeleteProfileConfirm by remember { mutableStateOf(false) }
     var showBackupConfirm by remember { mutableStateOf(false) }
     var showClearPlaylistConfirm by remember { mutableStateOf(false) }
+    var autoFillClipboardCandidate by remember { mutableStateOf<ClipboardConfigCandidate?>(null) }
     var profileName by remember(activeProfile) { mutableStateOf(activeProfile?.name ?: "") }
     var endpoint by remember(activeProfile) { mutableStateOf(activeProfile?.endpoint ?: "") }
     var region by remember(activeProfile) { mutableStateOf(activeProfile?.region ?: "") }
@@ -1315,6 +1319,27 @@ fun OssSettingsCard(
     var sk by remember(activeProfile) { mutableStateOf(activeProfile?.accessKeySecret ?: "") }
     var prefix by remember(activeProfile) { mutableStateOf(activeProfile?.prefix ?: "") }
     var skVisible by remember { mutableStateOf(false) }
+
+    fun applyClipboardConfig(candidate: ClipboardConfigCandidate) {
+        endpoint = candidate.parsed.endpoint ?: endpoint
+        region = candidate.parsed.region ?: region
+        forcePathStyle = candidate.parsed.forcePathStyle ?: forcePathStyle
+        bucket = candidate.parsed.bucket ?: bucket
+        ak = candidate.parsed.accessKeyId ?: ak
+        sk = candidate.parsed.accessKeySecret ?: sk
+        prefix = candidate.parsed.prefix ?: prefix
+        if (profileName.isBlank()) {
+            profileName = buildSuggestedProfileName(candidate.parsed)
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        val candidate = readClipboardConfigCandidate(context) ?: return@LaunchedEffect
+        val dismissedHash = clipboardPromptStore.readDismissedConfigHash()
+        if (shouldSuggestClipboardConfig(candidate.hash, dismissedHash)) {
+            autoFillClipboardCandidate = candidate
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -1635,22 +1660,13 @@ fun OssSettingsCard(
                             Toast.makeText(context, "剪贴板配置解密失败", Toast.LENGTH_SHORT).show()
                             return@Button
                         }
-                        val parsed = parseEnvClipboardConfig(clipboardText.plainText)
-                        if (parsed == null) {
+                        val candidate = buildClipboardConfigCandidate(clipboardText)
+                        if (candidate == null) {
                             onShowStatusError("剪贴板里没有可解析的 S3 配置")
                             Toast.makeText(context, "剪贴板里没有可解析的 S3 配置", Toast.LENGTH_SHORT).show()
                         } else {
-                            endpoint = parsed.endpoint ?: endpoint
-                            region = parsed.region ?: region
-                            forcePathStyle = parsed.forcePathStyle ?: forcePathStyle
-                            bucket = parsed.bucket ?: bucket
-                            ak = parsed.accessKeyId ?: ak
-                            sk = parsed.accessKeySecret ?: sk
-                            prefix = parsed.prefix ?: prefix
-                            if (profileName.isBlank()) {
-                                profileName = buildSuggestedProfileName(parsed)
-                            }
-                            val message = if (clipboardText.wasEncrypted) {
+                            applyClipboardConfig(candidate)
+                            val message = if (candidate.wasEncrypted) {
                                 "已解密并从剪贴板填充配置"
                             } else {
                                 "已从剪贴板填充配置"
@@ -1797,6 +1813,46 @@ fun OssSettingsCard(
             onDismiss = { showDeleteProfileConfirm = false }
         )
     }
+
+    if (autoFillClipboardCandidate != null) {
+        AlertDialog(
+            onDismissRequest = {
+                autoFillClipboardCandidate = null
+            },
+            title = { Text("检测到剪贴板配置") },
+            text = { Text("是否从剪贴板解析并填写当前配置？") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val candidate = autoFillClipboardCandidate ?: return@TextButton
+                        applyClipboardConfig(candidate)
+                        autoFillClipboardCandidate = null
+                        val message = if (candidate.wasEncrypted) {
+                            "已解密并从剪贴板填充配置"
+                        } else {
+                            "已从剪贴板填充配置"
+                        }
+                        onShowStatusCompleted(message)
+                    }
+                ) {
+                    Text("是")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        val candidate = autoFillClipboardCandidate ?: return@TextButton
+                        autoFillClipboardCandidate = null
+                        coroutineScope.launch {
+                            clipboardPromptStore.saveDismissedConfigHash(candidate.hash)
+                        }
+                    }
+                ) {
+                    Text("否")
+                }
+            }
+        )
+    }
 }
 
 @Composable
@@ -1935,6 +1991,12 @@ private data class DecodedClipboardConfig(
     val wasEncrypted: Boolean
 )
 
+private data class ClipboardConfigCandidate(
+    val parsed: ParsedEnvConfig,
+    val wasEncrypted: Boolean,
+    val hash: String
+)
+
 private fun parseEnvClipboardConfig(text: String): ParsedEnvConfig? {
     if (text.isBlank()) return null
 
@@ -1992,6 +2054,49 @@ private fun buildSuggestedProfileName(config: ParsedEnvConfig): String {
         config.endpoint != null -> config.endpoint.removePrefix("https://").removePrefix("http://")
         else -> "配置"
     }
+}
+
+private fun canonicalClipboardConfig(config: ParsedEnvConfig): String {
+    return listOf(
+        "S3_ENDPOINT=${config.endpoint.orEmpty()}",
+        "S3_REGION=${config.region.orEmpty()}",
+        "S3_FORCE_PATH_STYLE=${config.forcePathStyle?.toString().orEmpty()}",
+        "S3_BUCKET=${config.bucket.orEmpty()}",
+        "S3_ACCESS_KEY_ID=${config.accessKeyId.orEmpty()}",
+        "S3_SECRET_ACCESS_KEY=${config.accessKeySecret.orEmpty()}",
+        "S3_PREFIX=${config.prefix.orEmpty()}"
+    ).joinToString(separator = "\n")
+}
+
+private fun clipboardConfigHash(config: ParsedEnvConfig): String {
+    val bytes = MessageDigest.getInstance("SHA-256")
+        .digest(canonicalClipboardConfig(config).toByteArray(StandardCharsets.UTF_8))
+    return bytes.joinToString(separator = "") { byte -> "%02x".format(byte) }
+}
+
+private fun buildClipboardConfigCandidate(decodedConfig: DecodedClipboardConfig): ClipboardConfigCandidate? {
+    val parsed = parseEnvClipboardConfig(decodedConfig.plainText) ?: return null
+    return ClipboardConfigCandidate(
+        parsed = parsed,
+        wasEncrypted = decodedConfig.wasEncrypted,
+        hash = clipboardConfigHash(parsed)
+    )
+}
+
+private suspend fun readClipboardConfigCandidate(context: android.content.Context): ClipboardConfigCandidate? {
+    val clipboard = context.getSystemService(ClipboardManager::class.java)
+    val rawText = clipboard?.primaryClip
+        ?.takeIf { it.itemCount > 0 }
+        ?.getItemAt(0)
+        ?.coerceToText(context)
+        ?.toString()
+        .orEmpty()
+    val decoded = decodeClipboardConfig(rawText) ?: return null
+    return buildClipboardConfigCandidate(decoded)
+}
+
+private fun shouldSuggestClipboardConfig(candidateHash: String, dismissedHash: String?): Boolean {
+    return candidateHash.isNotBlank() && candidateHash != dismissedHash
 }
 
 private const val ENCRYPTED_CONFIG_PREFIX = "HMUSIC_CFG_V1:"
