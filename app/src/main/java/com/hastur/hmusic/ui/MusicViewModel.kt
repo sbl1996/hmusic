@@ -8,15 +8,13 @@ import com.hastur.hmusic.data.BackupProfileEntity
 import com.hastur.hmusic.data.MusicRepository
 import com.hastur.hmusic.data.RemoteSongEntity
 import com.hastur.hmusic.data.SongEntity
+import com.hastur.hmusic.sync.CloudSyncService
 import com.hastur.hmusic.player.LoopMode
 import com.hastur.hmusic.player.MusicPlayerManager
 import com.hastur.hmusic.player.PlaybackStateStore
 import com.hastur.hmusic.sync.OssClient
+import com.hastur.hmusic.sync.OssClientFactory
 import com.hastur.hmusic.sync.SongStorage
-import com.squareup.moshi.JsonAdapter
-import com.squareup.moshi.JsonClass
-import com.squareup.moshi.Moshi
-import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -96,14 +94,10 @@ class MusicViewModel(
     private val repository: MusicRepository,
     private val playerManager: MusicPlayerManager,
     private val songStorage: SongStorage,
-    private val playbackStateStore: PlaybackStateStore
+    private val playbackStateStore: PlaybackStateStore,
+    private val cloudSyncService: CloudSyncService,
+    private val ossClientFactory: OssClientFactory
 ) : ViewModel() {
-    private val moshi = Moshi.Builder()
-        .add(KotlinJsonAdapterFactory())
-        .build()
-    private val manifestAdapter: JsonAdapter<CloudPlaylistManifest> =
-        moshi.adapter(CloudPlaylistManifest::class.java)
-
     private val _statusMessageState = MutableStateFlow<StatusMessageState>(StatusMessageState.Idle)
     val statusMessageState: StateFlow<StatusMessageState> = _statusMessageState.asStateFlow()
 
@@ -186,19 +180,7 @@ class MusicViewModel(
             activeProfile.collect { profile ->
                 ossClient?.close()
                 _transferStates.value = emptyMap()
-                ossClient = if (profile != null && profile.endpoint.isNotEmpty()) {
-                    OssClient(
-                        endpoint = profile.endpoint,
-                        region = profile.region.ifBlank { OssClient.defaultRegion(profile.endpoint) },
-                        forcePathStyle = profile.forcePathStyle,
-                        bucket = profile.bucket,
-                        accessKeyId = profile.accessKeyId,
-                        accessKeySecret = profile.accessKeySecret,
-                        prefix = profile.prefix
-                    )
-                } else {
-                    null
-                }
+                ossClient = ossClientFactory.create(profile)
             }
         }
 
@@ -246,45 +228,24 @@ class MusicViewModel(
 
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val remoteStream = client.downloadSongStream(remoteSong.remoteKey)
-                val stored = remoteStream.inputStream.use {
-                    songStorage.storeRemoteStream(
-                        remoteKey = remoteSong.remoteKey,
-                        inputStream = it,
-                        totalBytes = remoteStream.contentLength,
-                        onProgress = { bytesRead, totalBytes ->
-                            _transferStates.update { states ->
-                                states + (
-                                    songKey to SongTransferState.Running(
-                                        SongTransferDirection.DOWNLOAD,
-                                        bytesRead,
-                                        totalBytes
-                                    )
+                val result = cloudSyncService.downloadSong(
+                    song = remoteSong,
+                    existingLocalSong = song.localSong,
+                    client = client,
+                    onProgress = { bytesRead, totalBytes ->
+                        _transferStates.update { states ->
+                            states + (
+                                songKey to SongTransferState.Running(
+                                    SongTransferDirection.DOWNLOAD,
+                                    bytesRead,
+                                    totalBytes
                                 )
-                            }
+                            )
                         }
-                    )
-                }
-                if (stored.md5sum != remoteSong.md5sum) {
-                    stored.file.delete()
-                    error("下载后的文件校验失败")
-                }
-
-                val local = SongEntity(
-                    id = song.localSong?.id ?: 0,
-                    md5sum = remoteSong.md5sum,
-                    title = song.localSong?.title ?: remoteSong.title,
-                    artist = song.localSong?.artist ?: remoteSong.artist,
-                    durationMs = if (remoteSong.durationMs > 0) remoteSong.durationMs else song.localSong?.durationMs ?: 0,
-                    fileName = remoteSong.fileName.ifBlank { stored.fileName },
-                    mimeType = remoteSong.mimeType.ifBlank { stored.mimeType },
-                    localPath = stored.file.absolutePath,
-                    localUpdatedAt = stored.updatedAt,
-                    syncTime = System.currentTimeMillis()
+                    }
                 )
-                repository.insertLocalSong(local)
                 _transferStates.update { it - songKey }
-                _statusMessageState.value = StatusMessageState.Completed("已同步到本地：${local.title}")
+                _statusMessageState.value = StatusMessageState.Completed("已同步到本地：${result.songTitle}")
             } catch (e: Exception) {
                 _transferStates.update {
                     it + (
@@ -326,17 +287,6 @@ class MusicViewModel(
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val localFile = File(localSong.localPath)
-                if (!localFile.exists()) {
-                    error("本地文件不存在")
-                }
-
-                val now = System.currentTimeMillis()
-                val remoteSong = buildRemoteSongEntity(profile.id, localSong, client, now)
-                client.uploadSongFile(
-                    remoteKey = remoteSong.remoteKey,
-                    file = localFile,
-                    mimeType = localSong.mimeType
-                )
                 _transferStates.update {
                     it + (
                         songKey to SongTransferState.Running(
@@ -346,30 +296,14 @@ class MusicViewModel(
                         )
                     )
                 }
-
-                val mergedRemoteSongs = mergeRemoteSongs(
-                    profileId = profile.id,
-                    incomingSong = remoteSong,
-                    currentRemoteSongs = remoteSongs.value,
-                    manifest = loadManifest(client)
+                val result = cloudSyncService.uploadSong(
+                    profile = profile,
+                    client = client,
+                    localSong = localSong,
+                    currentRemoteSongs = remoteSongs.value
                 )
-
-                val manifestJson = manifestAdapter.toJson(
-                    CloudPlaylistManifest(
-                        version = 1,
-                        updatedAt = now,
-                        songs = mergedRemoteSongs.map { CloudSong.fromRemoteSong(it) }
-                    )
-                )
-                val success = client.uploadManifest(manifestJson)
-                if (!success) {
-                    error("云端索引写入失败")
-                }
-
-                repository.replaceRemoteSongs(profile.id, mergedRemoteSongs)
-                touchProfileLastSync(profile, now)
                 _transferStates.update { it - songKey }
-                _statusMessageState.value = StatusMessageState.Completed("已备份到云端：${localSong.title}")
+                _statusMessageState.value = StatusMessageState.Completed("已备份到云端：${result.songTitle}")
             } catch (e: Exception) {
                 _transferStates.update {
                     it + (
@@ -534,14 +468,11 @@ class MusicViewModel(
 
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val manifest = loadManifest(client)
-                val remoteEntities = manifest?.songs?.map { it.toRemoteSongEntity(profile.id) }.orEmpty()
-                repository.replaceRemoteSongs(profile.id, remoteEntities)
-                touchProfileLastSync(profile)
+                val result = cloudSyncService.syncFromCloud(profile, client)
 
                 val downloadedCount = localSongs.value.count { it.isDownloaded }
                 _statusMessageState.value = StatusMessageState.Completed(
-                    "已同步 ${profile.name}：云端 ${remoteEntities.size} 首，本地 ${downloadedCount} 首"
+                    "已同步 ${profile.name}：云端 ${result.remoteSongCount} 首，本地 ${downloadedCount} 首"
                 )
             } catch (e: Exception) {
                 _statusMessageState.value = StatusMessageState.Error("同步歌单失败: ${e.localizedMessage}")
@@ -560,43 +491,11 @@ class MusicViewModel(
 
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val now = System.currentTimeMillis()
-                val syncedRemoteSongs = localSongs.value
-                    .mapNotNull { normalizeLocalSong(it) }
-                    .map { localSong ->
-                        val remoteKey = client.buildRemoteAudioKey(
-                            localSong.md5sum,
-                            localSong.fileName.ifBlank { File(localSong.localPath).name }
-                        )
-                        client.uploadSongFile(remoteKey, File(localSong.localPath), localSong.mimeType)
-                        RemoteSongEntity(
-                            profileId = profile.id,
-                            md5sum = localSong.md5sum,
-                            title = localSong.title,
-                            artist = localSong.artist,
-                            durationMs = localSong.durationMs,
-                            fileName = localSong.fileName,
-                            mimeType = localSong.mimeType,
-                            remoteKey = remoteKey,
-                            manifestUpdatedAt = maxOf(localSong.localUpdatedAt, now),
-                            syncTime = now
-                        )
-                    }
-
-                val manifestJson = manifestAdapter.toJson(
-                    CloudPlaylistManifest(
-                        version = 1,
-                        updatedAt = now,
-                        songs = syncedRemoteSongs.map { CloudSong.fromRemoteSong(it) }
-                    )
+                cloudSyncService.backupPlaylist(
+                    profile = profile,
+                    client = client,
+                    localSongs = localSongs.value
                 )
-                val success = client.uploadManifest(manifestJson)
-                if (!success) {
-                    error("云端清单写入失败")
-                }
-
-                repository.replaceRemoteSongs(profile.id, syncedRemoteSongs)
-                touchProfileLastSync(profile, now)
                 _statusMessageState.value = StatusMessageState.Completed("已备份到 ${profile.name}，歌单索引已刷新")
             } catch (e: Exception) {
                 _statusMessageState.value = StatusMessageState.Error("上传备份失败: ${e.localizedMessage}")
@@ -679,65 +578,6 @@ class MusicViewModel(
         } catch (_: Exception) {
             // Ignore profile bootstrapping errors.
         }
-    }
-
-    private suspend fun touchProfileLastSync(profile: BackupProfileEntity, syncedAt: Long = System.currentTimeMillis()) {
-        repository.updateBackupProfile(
-            profile.copy(
-                lastSyncAt = syncedAt,
-                updatedAt = syncedAt,
-                isActive = true
-            )
-        )
-    }
-
-    private fun normalizeLocalSong(song: SongEntity): SongEntity? {
-        if (!song.isDownloaded) return null
-        return song.copy(syncTime = System.currentTimeMillis())
-    }
-
-    private suspend fun loadManifest(client: OssClient): CloudPlaylistManifest? {
-        val json = client.downloadManifest() ?: return null
-        return manifestAdapter.fromJson(json)
-    }
-
-    private fun buildRemoteSongEntity(
-        profileId: Long,
-        localSong: SongEntity,
-        client: OssClient,
-        updatedAt: Long
-    ): RemoteSongEntity {
-        val remoteKey = client.buildRemoteAudioKey(
-            localSong.md5sum,
-            localSong.fileName.ifBlank { File(localSong.localPath).name }
-        )
-        return RemoteSongEntity(
-            profileId = profileId,
-            md5sum = localSong.md5sum,
-            title = localSong.title,
-            artist = localSong.artist,
-            durationMs = localSong.durationMs,
-            fileName = localSong.fileName,
-            mimeType = localSong.mimeType,
-            remoteKey = remoteKey,
-            manifestUpdatedAt = maxOf(localSong.localUpdatedAt, updatedAt),
-            syncTime = updatedAt
-        )
-    }
-
-    private fun mergeRemoteSongs(
-        profileId: Long,
-        incomingSong: RemoteSongEntity,
-        currentRemoteSongs: List<RemoteSongEntity>,
-        manifest: CloudPlaylistManifest?
-    ): List<RemoteSongEntity> {
-        val mergedByMd5 = linkedMapOf<String, RemoteSongEntity>()
-        manifest?.songs
-            ?.map { it.toRemoteSongEntity(profileId) }
-            ?.forEach { mergedByMd5[it.md5sum] = it }
-        currentRemoteSongs.forEach { mergedByMd5[it.md5sum] = it }
-        mergedByMd5[incomingSong.md5sum] = incomingSong
-        return mergedByMd5.values.toList()
     }
 
     private fun localSongFileSize(song: SongEntity): Long? {
@@ -864,65 +704,25 @@ class MusicViewModel(
     }
 }
 
-@JsonClass(generateAdapter = true)
-data class CloudPlaylistManifest(
-    val version: Int = 1,
-    val updatedAt: Long = 0,
-    val songs: List<CloudSong> = emptyList()
-)
-
-@JsonClass(generateAdapter = true)
-data class CloudSong(
-    val md5sum: String,
-    val title: String,
-    val artist: String,
-    val durationMs: Long = 0,
-    val fileName: String = "",
-    val mimeType: String = "",
-    val remoteKey: String = "",
-    val updatedAt: Long = 0
-) {
-    fun toRemoteSongEntity(profileId: Long): RemoteSongEntity {
-        return RemoteSongEntity(
-            profileId = profileId,
-            md5sum = md5sum,
-            title = title.ifBlank { fileName.substringBeforeLast(".") },
-            artist = artist.ifBlank { "云端备份" },
-            durationMs = durationMs,
-            fileName = fileName,
-            mimeType = mimeType,
-            remoteKey = remoteKey,
-            manifestUpdatedAt = updatedAt,
-            syncTime = System.currentTimeMillis()
-        )
-    }
-
-    companion object {
-        fun fromRemoteSong(song: RemoteSongEntity): CloudSong {
-            return CloudSong(
-                md5sum = song.md5sum,
-                title = song.title,
-                artist = song.artist,
-                durationMs = song.durationMs,
-                fileName = song.fileName,
-                mimeType = song.mimeType,
-                remoteKey = song.remoteKey,
-                updatedAt = song.manifestUpdatedAt
-            )
-        }
-    }
-}
-
 class MusicViewModelFactory(
     private val repository: MusicRepository,
     private val playerManager: MusicPlayerManager,
     private val songStorage: SongStorage,
-    private val playbackStateStore: PlaybackStateStore
+    private val playbackStateStore: PlaybackStateStore,
+    private val cloudSyncService: CloudSyncService,
+    private val ossClientFactory: OssClientFactory
 ) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         if (modelClass.isAssignableFrom(MusicViewModel::class.java)) {
             @Suppress("UNCHECKED_CAST")
-            return MusicViewModel(repository, playerManager, songStorage, playbackStateStore) as T
+            return MusicViewModel(
+                repository,
+                playerManager,
+                songStorage,
+                playbackStateStore,
+                cloudSyncService,
+                ossClientFactory
+            ) as T
         }
         throw IllegalArgumentException("Unknown ViewModel class")
     }

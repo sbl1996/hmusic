@@ -14,6 +14,10 @@ import com.hastur.hmusic.data.MusicRepository
 import com.hastur.hmusic.player.MusicPlayerManager
 import com.hastur.hmusic.player.PlayerManagerProvider
 import com.hastur.hmusic.player.PlaybackStateStore
+import com.hastur.hmusic.sync.CloudPlaylistManifestStore
+import com.hastur.hmusic.sync.CloudSyncService
+import com.hastur.hmusic.sync.OssClientFactory
+import com.hastur.hmusic.sync.RemoteSongSyncAssembler
 import com.hastur.hmusic.sync.SongStorage
 import com.hastur.hmusic.ui.MusicPlayerScreen
 import com.hastur.hmusic.ui.MusicViewModel
@@ -25,8 +29,19 @@ class MainActivity : ComponentActivity() {
     private lateinit var repository: MusicRepository
     private lateinit var songStorage: SongStorage
     private lateinit var playbackStateStore: PlaybackStateStore
+    private lateinit var manifestStore: CloudPlaylistManifestStore
+    private lateinit var remoteSongSyncAssembler: RemoteSongSyncAssembler
+    private lateinit var cloudSyncService: CloudSyncService
+    private lateinit var ossClientFactory: OssClientFactory
     private val viewModel: MusicViewModel by viewModels {
-        MusicViewModelFactory(repository, playerManager, songStorage, playbackStateStore)
+        MusicViewModelFactory(
+            repository,
+            playerManager,
+            songStorage,
+            playbackStateStore,
+            cloudSyncService,
+            ossClientFactory
+        )
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -38,6 +53,10 @@ class MainActivity : ComponentActivity() {
         playerManager = PlayerManagerProvider.get(this)
         songStorage = SongStorage(applicationContext)
         playbackStateStore = PlaybackStateStore(applicationContext)
+        manifestStore = CloudPlaylistManifestStore()
+        remoteSongSyncAssembler = RemoteSongSyncAssembler()
+        cloudSyncService = CloudSyncService(repository, manifestStore, remoteSongSyncAssembler, songStorage)
+        ossClientFactory = OssClientFactory()
 
         enableEdgeToEdge()
         setContent {

@@ -26,6 +26,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
@@ -1031,7 +1032,7 @@ fun PlaybackControlsRow(
                 .testTag("playlist_toggle_button")
         ) {
             Icon(
-                imageVector = if (isPlaylistExpanded) Icons.Filled.ExpandMore else Icons.Filled.QueueMusic,
+                imageVector = if (isPlaylistExpanded) Icons.Filled.ExpandMore else Icons.AutoMirrored.Filled.QueueMusic,
                 contentDescription = if (isPlaylistExpanded) "Collapse playlist" else "Expand playlist",
                 tint = accentColor,
                 modifier = Modifier.size(20.dp)
@@ -1206,7 +1207,7 @@ private fun PlaylistSection(
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     Icon(
-                        imageVector = Icons.Filled.QueueMusic,
+                        imageVector = Icons.AutoMirrored.Filled.QueueMusic,
                         contentDescription = null,
                         tint = accentColor,
                         modifier = Modifier.size(18.dp)
