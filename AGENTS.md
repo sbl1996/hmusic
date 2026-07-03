@@ -13,6 +13,7 @@ Resources and manifest files are in `app/src/main/res` and `app/src/main/Android
 ## Build, Test, and Development Commands
 - `./gradlew assembleDebug` builds the debug APK.
 - `set -a; source ./.release-signing.env >/dev/null 2>&1; set +a; ./gradlew assembleRelease` builds the signed release APK.
+  - `Get-Content .\.release-signing.env | % { $k,$v = $_ -split '=',2; Set-Item "Env:$k" $v }; .\gradlew.bat assembleRelease` in Windows PowerShell.
 - `./gradlew test` runs JVM unit tests, including Robolectric-based tests.
 - `./gradlew connectedAndroidTest` runs device or emulator instrumentation tests.
 - `./gradlew lint` runs Android lint checks.

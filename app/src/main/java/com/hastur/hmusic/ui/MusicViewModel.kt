@@ -430,7 +430,7 @@ class MusicViewModel(
             val now = System.currentTimeMillis()
             val normalizedEndpoint = endpoint.trim()
             val normalizedName = name.trim().ifEmpty {
-                nextProfileName(backupProfiles.value, "配置")
+                nextProfileName(backupProfiles.value, "新配置")
             }
 
             val profile = BackupProfileEntity(
@@ -512,7 +512,7 @@ class MusicViewModel(
                     id = existing?.id ?: 0,
                     md5sum = stored.md5sum,
                     title = title.trim().ifBlank { existing?.title ?: stored.fileName.substringBeforeLast(".") },
-                    artist = artist.trim().ifBlank { existing?.artist ?: "本地乐迷" },
+                    artist = artist.trim().ifBlank { existing?.artist ?: "佚名" },
                     durationMs = resolveImportedSongDuration(
                         filePath = stored.file.absolutePath,
                         fallbackDurationMs = existing?.durationMs ?: 0L

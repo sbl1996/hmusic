@@ -106,7 +106,7 @@ fun MusicPlayerScreen(
             pickedUri = uri.toString()
             val lastSegment = uri.path?.substringAfterLast("/") ?: ""
             inputTitle = lastSegment.substringBeforeLast(".").ifEmpty { "我的本地音乐" }
-            inputArtist = "本地乐迷"
+            inputArtist = "佚名"
             showAddDialog = true
         }
     }
@@ -398,7 +398,7 @@ fun MusicPlayerScreen(
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Text(
-                        text = "解析本地音乐",
+                        text = "导入本地音乐",
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Bold,
                         color = textWhite,
@@ -464,7 +464,7 @@ fun MusicPlayerScreen(
                             shape = RoundedCornerShape(12.dp),
                             modifier = Modifier.testTag("save_song_dialog_button")
                         ) {
-                            Text("导入到本地", fontWeight = FontWeight.Bold)
+                            Text("导入", fontWeight = FontWeight.Bold)
                         }
                     }
                 }
@@ -2052,7 +2052,7 @@ private fun buildSuggestedProfileName(config: ParsedEnvConfig): String {
         bucket.isNotBlank() && prefix.isNotBlank() -> "$bucket/$prefix"
         bucket.isNotBlank() -> bucket
         config.endpoint != null -> config.endpoint.removePrefix("https://").removePrefix("http://")
-        else -> "配置"
+        else -> "新配置"
     }
 }
 
