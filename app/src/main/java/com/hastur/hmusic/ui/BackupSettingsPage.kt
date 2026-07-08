@@ -76,7 +76,9 @@ fun BackupSettingsPage(
     profiles: List<BackupProfileEntity>,
     activeProfile: BackupProfileEntity?,
     statusMessageState: StatusMessageState,
+    musicdlBaseUrl: String,
     onSave: (String, String, String, Boolean, String, String, String, String) -> Unit,
+    onMusicdlBaseUrlChange: (String) -> Unit,
     onCreateProfile: (Boolean) -> Unit,
     onSwitchProfile: (Long) -> Unit,
     onDeleteProfile: () -> Unit,
@@ -123,6 +125,14 @@ fun BackupSettingsPage(
                 textDim = textDim
             )
 
+            MusicdlSettingsCard(
+                baseUrl = musicdlBaseUrl,
+                onBaseUrlChange = onMusicdlBaseUrlChange,
+                accentColor = accentColor,
+                textWhite = textWhite,
+                textDim = textDim
+            )
+
             Spacer(modifier = Modifier.height(24.dp))
         }
 
@@ -147,3 +157,64 @@ fun BackupSettingsPage(
     }
 }
 
+@Composable
+private fun MusicdlSettingsCard(
+    baseUrl: String,
+    onBaseUrlChange: (String) -> Unit,
+    accentColor: Color,
+    textWhite: Color,
+    textDim: Color
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        color = Color(0x0AFFFFFF),
+        border = BorderStroke(1.dp, Color(0x10FFFFFF))
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Search,
+                    contentDescription = null,
+                    tint = accentColor,
+                    modifier = Modifier.size(18.dp)
+                )
+                Text(
+                    text = "在线搜索 API",
+                    color = textWhite,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+
+            OutlinedTextField(
+                value = baseUrl,
+                onValueChange = onBaseUrlChange,
+                label = { Text("musicdl API") },
+                placeholder = { Text("http://10.0.2.2:8000") },
+                singleLine = true,
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedTextColor = textWhite,
+                    unfocusedTextColor = textWhite,
+                    focusedBorderColor = accentColor,
+                    unfocusedBorderColor = Color(0x1EFFFFFF),
+                    focusedLabelColor = accentColor,
+                    unfocusedLabelColor = textDim,
+                    focusedPlaceholderColor = textDim.copy(alpha = 0.5f),
+                    unfocusedPlaceholderColor = textDim.copy(alpha = 0.5f)
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("musicdl_base_url_input")
+            )
+        }
+    }
+}

@@ -33,10 +33,12 @@ class MusicRepository(private val musicDao: MusicDao) {
 
     suspend fun deleteLocalSong(song: SongEntity) {
         musicDao.deleteLocalSong(song)
+        musicDao.deleteMusicdlDownloadsByMd5(song.md5sum)
     }
 
     suspend fun clearLocalSongs() {
         musicDao.clearLocalSongs()
+        musicDao.clearMusicdlDownloads()
     }
 
     suspend fun clearRemoteSongs() {
@@ -77,5 +79,20 @@ class MusicRepository(private val musicDao: MusicDao) {
 
     suspend fun replaceRemoteSongs(profileId: Long, songs: List<RemoteSongEntity>) {
         musicDao.replaceRemoteSongs(profileId, songs)
+    }
+
+    suspend fun getMusicdlDownloadsByStableKeys(stableKeys: List<String>): List<MusicdlDownloadEntity> {
+        if (stableKeys.isEmpty()) return emptyList()
+        return musicDao.getMusicdlDownloadsByStableKeys(stableKeys)
+    }
+
+    suspend fun insertMusicdlDownload(download: MusicdlDownloadEntity): Long {
+        return musicDao.insertMusicdlDownload(download)
+    }
+
+    suspend fun deleteMusicdlDownloadsByStableKeys(stableKeys: List<String>) {
+        if (stableKeys.isNotEmpty()) {
+            musicDao.deleteMusicdlDownloadsByStableKeys(stableKeys)
+        }
     }
 }

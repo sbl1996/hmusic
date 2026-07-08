@@ -29,8 +29,14 @@ interface MusicDao {
     @Delete
     suspend fun deleteLocalSong(song: SongEntity)
 
+    @Query("DELETE FROM musicdl_downloads WHERE md5sum = :md5sum")
+    suspend fun deleteMusicdlDownloadsByMd5(md5sum: String)
+
     @Query("DELETE FROM songs")
     suspend fun clearLocalSongs()
+
+    @Query("DELETE FROM musicdl_downloads")
+    suspend fun clearMusicdlDownloads()
 
     @Query("DELETE FROM remote_songs")
     suspend fun clearRemoteSongs()
@@ -67,6 +73,15 @@ interface MusicDao {
 
     @Query("SELECT * FROM backup_profiles WHERE id = :profileId LIMIT 1")
     suspend fun getBackupProfile(profileId: Long): BackupProfileEntity?
+
+    @Query("SELECT * FROM musicdl_downloads WHERE stableKey IN (:stableKeys)")
+    suspend fun getMusicdlDownloadsByStableKeys(stableKeys: List<String>): List<MusicdlDownloadEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertMusicdlDownload(download: MusicdlDownloadEntity): Long
+
+    @Query("DELETE FROM musicdl_downloads WHERE stableKey IN (:stableKeys)")
+    suspend fun deleteMusicdlDownloadsByStableKeys(stableKeys: List<String>)
 
     @Transaction
     suspend fun activateBackupProfile(profileId: Long, updatedAt: Long = System.currentTimeMillis()) {

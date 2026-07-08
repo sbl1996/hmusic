@@ -81,6 +81,8 @@ fun MusicPlayerScreen(
     val activeProfile by viewModel.activeProfile.collectAsState()
     val statusMessageState by viewModel.statusMessageState.collectAsState()
     val transferStates by viewModel.transferStates.collectAsState()
+    val musicdlSearchState by viewModel.musicdlSearchState.collectAsState()
+    val musicdlBaseUrl by viewModel.musicdlBaseUrl.collectAsState()
 
     val currentSong by viewModel.currentSong.collectAsState()
     val isPlaying by viewModel.isPlaying.collectAsState()
@@ -91,6 +93,7 @@ fun MusicPlayerScreen(
     val bannerAutoDismissMillis = 3000L
 
     var showSettings by remember { mutableStateOf(false) }
+    var showSearch by rememberSaveable { mutableStateOf(false) }
     var showAddDialog by remember { mutableStateOf(false) }
     var pickedUri by remember { mutableStateOf("") }
     var inputTitle by remember { mutableStateOf("") }
@@ -221,7 +224,10 @@ fun MusicPlayerScreen(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     // OSS Settings Toggle icon
                     IconButton(
-                        onClick = { showSettings = !showSettings },
+                        onClick = {
+                            showSettings = !showSettings
+                            if (showSettings) showSearch = false
+                        },
                         modifier = Modifier
                             .testTag("settings_button")
                             .clip(CircleShape)
@@ -232,6 +238,26 @@ fun MusicPlayerScreen(
                             imageVector = if (showSettings) Icons.Filled.Close else Icons.Filled.Cloud,
                             contentDescription = if (showSettings) "Close settings" else "OSS Settings",
                             tint = if (showSettings) accentNeonColor else textWhite
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.width(8.dp))
+
+                    IconButton(
+                        onClick = {
+                            showSearch = !showSearch
+                            if (showSearch) showSettings = false
+                        },
+                        modifier = Modifier
+                            .testTag("search_button")
+                            .clip(CircleShape)
+                            .background(Color(0x13FFFFFF))
+                            .border(1.dp, Color(0x1AFFFFFF), CircleShape)
+                    ) {
+                        Icon(
+                            imageVector = if (showSearch) Icons.Filled.Close else Icons.Filled.Search,
+                            contentDescription = if (showSearch) "Close search" else "Search musicdl",
+                            tint = if (showSearch) accentNeonColor else textWhite
                         )
                     }
 
@@ -260,9 +286,11 @@ fun MusicPlayerScreen(
                     profiles = backupProfiles,
                     activeProfile = activeProfile,
                     statusMessageState = statusMessageState,
+                    musicdlBaseUrl = musicdlBaseUrl,
                     onSave = { name, endpoint, region, forcePathStyle, bucket, ak, sk, prefix ->
                         viewModel.saveActiveProfile(name, endpoint, region, forcePathStyle, bucket, ak, sk, prefix)
                     },
+                    onMusicdlBaseUrlChange = viewModel::updateMusicdlBaseUrl,
                     onCreateProfile = { copyCurrent -> viewModel.createProfile(copyCurrent) },
                     onSwitchProfile = { profileId -> viewModel.switchProfile(profileId) },
                     onDeleteProfile = { viewModel.deleteActiveProfile() },
@@ -277,6 +305,21 @@ fun MusicPlayerScreen(
                     textWhite = textWhite,
                     textDim = textDim,
                     modifier = Modifier.weight(1f)
+                )
+            } else if (showSearch) {
+                SearchSection(
+                    searchState = musicdlSearchState,
+                    transferStates = transferStates,
+                    onKeywordChange = viewModel::updateMusicdlKeyword,
+                    onSearch = viewModel::searchMusicdl,
+                    onDownload = viewModel::downloadMusicdlItem,
+                    accentColor = accentNeonColor,
+                    textWhite = textWhite,
+                    textDim = textDim,
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .padding(bottom = 8.dp)
                 )
             } else {
                 // Playlist + Player layout

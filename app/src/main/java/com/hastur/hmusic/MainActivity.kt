@@ -14,6 +14,8 @@ import com.hastur.hmusic.data.MusicRepository
 import com.hastur.hmusic.player.MusicPlayerManager
 import com.hastur.hmusic.player.PlayerManagerProvider
 import com.hastur.hmusic.player.PlaybackStateStore
+import com.hastur.hmusic.search.MusicdlApiClient
+import com.hastur.hmusic.search.MusicdlSettingsStore
 import com.hastur.hmusic.sync.CloudPlaylistManifestStore
 import com.hastur.hmusic.sync.CloudSyncService
 import com.hastur.hmusic.sync.OssClientFactory
@@ -33,6 +35,8 @@ class MainActivity : ComponentActivity() {
     private lateinit var remoteSongSyncAssembler: RemoteSongSyncAssembler
     private lateinit var cloudSyncService: CloudSyncService
     private lateinit var ossClientFactory: OssClientFactory
+    private lateinit var musicdlApiClient: MusicdlApiClient
+    private lateinit var musicdlSettingsStore: MusicdlSettingsStore
     private val viewModel: MusicViewModel by viewModels {
         MusicViewModelFactory(
             repository,
@@ -40,7 +44,9 @@ class MainActivity : ComponentActivity() {
             songStorage,
             playbackStateStore,
             cloudSyncService,
-            ossClientFactory
+            ossClientFactory,
+            musicdlApiClient,
+            musicdlSettingsStore
         )
     }
 
@@ -57,6 +63,8 @@ class MainActivity : ComponentActivity() {
         remoteSongSyncAssembler = RemoteSongSyncAssembler()
         cloudSyncService = CloudSyncService(repository, manifestStore, remoteSongSyncAssembler, songStorage)
         ossClientFactory = OssClientFactory()
+        musicdlApiClient = MusicdlApiClient()
+        musicdlSettingsStore = MusicdlSettingsStore(applicationContext)
 
         enableEdgeToEdge()
         setContent {

@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.hastur.hmusic.data.BackupProfileEntity
+import com.hastur.hmusic.data.MusicdlDownloadEntity
 import com.hastur.hmusic.data.MusicRepository
 import com.hastur.hmusic.data.RemoteSongEntity
 import com.hastur.hmusic.data.SongEntity
@@ -12,6 +13,11 @@ import com.hastur.hmusic.sync.CloudSyncService
 import com.hastur.hmusic.player.LoopMode
 import com.hastur.hmusic.player.MusicPlayerManager
 import com.hastur.hmusic.player.PlaybackStateStore
+import com.hastur.hmusic.search.MusicdlApiClient
+import com.hastur.hmusic.search.MusicdlDownloadResult
+import com.hastur.hmusic.search.MusicdlSearchItem
+import com.hastur.hmusic.search.MusicdlSearchResponse
+import com.hastur.hmusic.search.MusicdlSettingsStore
 import com.hastur.hmusic.sync.OssClient
 import com.hastur.hmusic.sync.OssClientFactory
 import com.hastur.hmusic.sync.SongStorage
@@ -89,6 +95,17 @@ sealed class SongTransferState {
     ) : SongTransferState()
 }
 
+data class MusicdlSearchUiState(
+    val keyword: String = "",
+    val searchId: String? = null,
+    val sessionId: String? = null,
+    val items: List<MusicdlSearchItem> = emptyList(),
+    val downloadedItemMd5ByKey: Map<String, String> = emptyMap(),
+    val isSearching: Boolean = false,
+    val error: String? = null,
+    val lastSources: List<String> = emptyList()
+)
+
 @OptIn(ExperimentalCoroutinesApi::class)
 class MusicViewModel(
     private val repository: MusicRepository,
@@ -96,13 +113,25 @@ class MusicViewModel(
     private val songStorage: SongStorage,
     private val playbackStateStore: PlaybackStateStore,
     private val cloudSyncService: CloudSyncService,
-    private val ossClientFactory: OssClientFactory
+    private val ossClientFactory: OssClientFactory,
+    private val musicdlApiClient: MusicdlApiClient,
+    private val musicdlSettingsStore: MusicdlSettingsStore
 ) : ViewModel() {
     private val _statusMessageState = MutableStateFlow<StatusMessageState>(StatusMessageState.Idle)
     val statusMessageState: StateFlow<StatusMessageState> = _statusMessageState.asStateFlow()
 
     private val _transferStates = MutableStateFlow<Map<String, SongTransferState>>(emptyMap())
     val transferStates: StateFlow<Map<String, SongTransferState>> = _transferStates.asStateFlow()
+
+    private val _musicdlSearchState = MutableStateFlow(MusicdlSearchUiState())
+    val musicdlSearchState: StateFlow<MusicdlSearchUiState> = _musicdlSearchState.asStateFlow()
+
+    val musicdlBaseUrl: StateFlow<String> = musicdlSettingsStore.baseUrlFlow
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = MusicdlSettingsStore.DEFAULT_BASE_URL
+        )
 
     val localSongs: StateFlow<List<SongEntity>> = repository.localSongs
         .stateIn(
@@ -209,6 +238,203 @@ class MusicViewModel(
         }
         playerManager.playSong(localSong)
         persistPlaybackState()
+    }
+
+    fun updateMusicdlKeyword(keyword: String) {
+        _musicdlSearchState.update { it.copy(keyword = keyword, error = null) }
+    }
+
+    fun updateMusicdlBaseUrl(baseUrl: String) {
+        viewModelScope.launch {
+            musicdlSettingsStore.saveBaseUrl(baseUrl)
+        }
+    }
+
+    fun searchMusicdl() {
+        val keyword = musicdlSearchState.value.keyword.trim()
+        if (keyword.isBlank()) {
+            _musicdlSearchState.update { it.copy(error = "请输入搜索关键词") }
+            return
+        }
+        val baseUrl = musicdlBaseUrl.value
+        _musicdlSearchState.update { it.copy(isSearching = true, searchId = null, error = null) }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                var task = musicdlApiClient.createSearch(baseUrl = baseUrl, keyword = keyword)
+                _musicdlSearchState.update { it.copy(searchId = task.searchId) }
+                while (isActive && !task.isTerminal) {
+                    delay(1000)
+                    task = musicdlApiClient.getSearch(baseUrl = baseUrl, searchId = task.searchId)
+                    _musicdlSearchState.update { it.copy(searchId = task.searchId) }
+                }
+                if (task.status == "failed") {
+                    error(task.error ?: "musicdl 搜索失败")
+                }
+                val response = task.result ?: error("musicdl 搜索结果为空")
+                val downloadedItemMd5ByKey = resolveDownloadedMusicdlItems(response.items)
+                _musicdlSearchState.value = response.toUiState(downloadedItemMd5ByKey)
+                _statusMessageState.value = StatusMessageState.Completed("找到 ${response.itemCount} 首在线歌曲")
+            } catch (e: Exception) {
+                val message = e.localizedMessage ?: "未知错误"
+                _musicdlSearchState.update { it.copy(isSearching = false, error = message) }
+                _statusMessageState.value = StatusMessageState.Error("搜索失败: $message")
+            }
+        }
+    }
+
+    fun downloadMusicdlItem(item: MusicdlSearchItem) {
+        val downloadedMd5 = musicdlSearchState.value.downloadedItemMd5ByKey[musicdlItemStableKey(item)]
+        if (!downloadedMd5.isNullOrBlank()) {
+            playDownloadedMusicdlItem(downloadedMd5)
+            return
+        }
+
+        val sessionId = musicdlSearchState.value.sessionId
+        if (sessionId.isNullOrBlank()) {
+            _statusMessageState.value = StatusMessageState.Error("搜索会话已失效，请重新搜索")
+            return
+        }
+
+        val transferKey = musicdlTransferKey(sessionId, item.itemId)
+        if (_transferStates.value[transferKey] is SongTransferState.Running) {
+            return
+        }
+        _transferStates.update {
+            it + (
+                transferKey to SongTransferState.Running(
+                    SongTransferDirection.DOWNLOAD,
+                    bytesRead = 0L,
+                    totalBytes = item.fileSizeBytes
+                )
+            )
+        }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val baseUrl = musicdlBaseUrl.value
+                var task = musicdlApiClient.createDownload(baseUrl, sessionId, item.itemId)
+                while (isActive && !task.isTerminal) {
+                    _transferStates.update {
+                        it + (
+                            transferKey to SongTransferState.Running(
+                                SongTransferDirection.DOWNLOAD,
+                                bytesRead = task.progress.downloadedBytes,
+                                totalBytes = task.progress.totalBytes ?: item.fileSizeBytes
+                            )
+                        )
+                    }
+                    delay(800)
+                    task = musicdlApiClient.getDownload(baseUrl, task.taskId)
+                }
+
+                if (task.status == "failed") {
+                    error(task.error ?: "musicdl 下载失败")
+                }
+                if (task.status != "completed") {
+                    error("musicdl 下载未完成")
+                }
+
+                val remoteName = musicdlStorageName(item, task.result)
+                val stored = musicdlApiClient.downloadFile(baseUrl, task.taskId) { input, totalBytes ->
+                    songStorage.storeRemoteStream(
+                        remoteKey = remoteName,
+                        inputStream = input,
+                        totalBytes = totalBytes ?: item.fileSizeBytes
+                    ) { bytesRead, total ->
+                        _transferStates.update {
+                            it + (
+                                transferKey to SongTransferState.Running(
+                                    SongTransferDirection.DOWNLOAD,
+                                    bytesRead = bytesRead,
+                                    totalBytes = total
+                                )
+                            )
+                        }
+                    }
+                }
+
+                val existing = repository.findLocalSongByMd5(stored.md5sum)
+                val song = SongEntity(
+                    id = existing?.id ?: 0,
+                    md5sum = stored.md5sum,
+                    title = item.songName?.trim().orEmpty()
+                        .ifBlank { task.result?.songName?.trim().orEmpty() }
+                        .ifBlank { existing?.title ?: stored.fileName.substringBeforeLast(".") },
+                    artist = item.singers?.trim().orEmpty()
+                        .ifBlank { task.result?.singers?.trim().orEmpty() }
+                        .ifBlank { existing?.artist ?: "佚名" },
+                    durationMs = resolveImportedSongDuration(
+                        filePath = stored.file.absolutePath,
+                        fallbackDurationMs = item.durationSeconds?.times(1000)
+                            ?: existing?.durationMs
+                            ?: 0L
+                    ),
+                    fileName = stored.fileName,
+                    mimeType = stored.mimeType,
+                    localPath = stored.file.absolutePath,
+                    localUpdatedAt = stored.updatedAt,
+                    syncTime = System.currentTimeMillis()
+                )
+                repository.insertLocalSong(song)
+                repository.insertMusicdlDownload(
+                    MusicdlDownloadEntity(
+                        stableKey = musicdlItemStableKey(item),
+                        md5sum = song.md5sum,
+                        source = item.source.orEmpty(),
+                        songName = item.songName.orEmpty(),
+                        singers = item.singers.orEmpty(),
+                        fileSizeBytes = item.fileSizeBytes,
+                        fileSize = item.fileSize.orEmpty(),
+                        extension = item.extension.orEmpty(),
+                        durationSeconds = item.durationSeconds,
+                        duration = item.duration.orEmpty(),
+                        identifier = item.identifier.orEmpty(),
+                        album = item.album.orEmpty(),
+                        coverUrl = item.coverUrl.orEmpty()
+                    )
+                )
+                _musicdlSearchState.update { state ->
+                    state.copy(downloadedItemMd5ByKey = state.downloadedItemMd5ByKey + (musicdlItemStableKey(item) to song.md5sum))
+                }
+                _transferStates.update { it - transferKey }
+                _statusMessageState.value = StatusMessageState.Completed("已下载：${song.title}")
+                withContext(Dispatchers.Main) {
+                    playerManager.playSong(song)
+                    persistPlaybackState()
+                }
+            } catch (e: Exception) {
+                val message = e.localizedMessage ?: "未知错误"
+                _transferStates.update {
+                    it + (
+                        transferKey to SongTransferState.Failed(
+                            SongTransferDirection.DOWNLOAD,
+                            message
+                        )
+                    )
+                }
+                _statusMessageState.value = StatusMessageState.Error("在线下载失败: $message")
+                delay(2500)
+                _transferStates.update { states ->
+                    if (states[transferKey] is SongTransferState.Failed) states - transferKey else states
+                }
+            }
+        }
+    }
+
+    private fun playDownloadedMusicdlItem(md5sum: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val localSong = repository.findLocalSongByMd5(md5sum)
+            if (localSong == null || !localSong.isDownloaded) {
+                _statusMessageState.value = StatusMessageState.Error("本地文件不可用，请重新下载")
+                return@launch
+            }
+            withContext(Dispatchers.Main) {
+                shouldShowPlayerError.value = true
+                playerManager.playSong(localSong)
+                persistPlaybackState()
+            }
+        }
     }
 
     fun downloadSong(song: LibrarySongItem) {
@@ -662,6 +888,71 @@ class MusicViewModel(
         }
     }
 
+    private fun MusicdlSearchResponse.toUiState(
+        downloadedItemMd5ByKey: Map<String, String>
+    ): MusicdlSearchUiState {
+        return MusicdlSearchUiState(
+            keyword = keyword,
+            searchId = null,
+            sessionId = sessionId,
+            items = items,
+            downloadedItemMd5ByKey = downloadedItemMd5ByKey,
+            isSearching = false,
+            error = null,
+            lastSources = sources
+        )
+    }
+
+    private suspend fun resolveDownloadedMusicdlItems(
+        items: List<MusicdlSearchItem>
+    ): Map<String, String> {
+        val stableKeys = items.map(::musicdlItemStableKey).distinct()
+        val downloads = repository.getMusicdlDownloadsByStableKeys(stableKeys)
+        val downloaded = mutableMapOf<String, String>()
+        val staleKeys = mutableListOf<String>()
+
+        downloads.forEach { download ->
+            val localSong = repository.findLocalSongByMd5(download.md5sum)
+            if (localSong?.isDownloaded == true) {
+                downloaded[download.stableKey] = download.md5sum
+            } else {
+                staleKeys += download.stableKey
+            }
+        }
+
+        repository.deleteMusicdlDownloadsByStableKeys(staleKeys)
+        return downloaded
+    }
+
+    private fun musicdlItemStableKey(item: MusicdlSearchItem): String {
+        return listOf(
+            item.source,
+            item.songName,
+            item.singers,
+            item.fileSizeBytes?.toString() ?: item.fileSize,
+            item.extension,
+            item.durationSeconds?.toString() ?: item.duration
+        ).joinToString("|") { it.orEmpty().trim().lowercase() }
+    }
+
+    private fun musicdlTransferKey(sessionId: String, itemId: String): String {
+        return "musicdl:$sessionId:$itemId"
+    }
+
+    private fun musicdlStorageName(item: MusicdlSearchItem, result: MusicdlDownloadResult?): String {
+        val title = item.songName?.trim().orEmpty()
+            .ifBlank { result?.songName?.trim().orEmpty() }
+            .ifBlank { "track" }
+        val artist = item.singers?.trim().orEmpty()
+            .ifBlank { result?.singers?.trim().orEmpty() }
+        val extension = item.extension?.trim()?.trimStart('.').orEmpty()
+            .ifBlank { result?.extension?.trim()?.trimStart('.').orEmpty() }
+            .ifBlank { result?.savePath?.substringAfterLast('.', "")?.trim().orEmpty() }
+            .ifBlank { "mp3" }
+        val baseName = if (artist.isBlank()) title else "$artist - $title"
+        return "$baseName.$extension"
+    }
+
     private fun nextProfileName(existingProfiles: List<BackupProfileEntity>, baseName: String): String {
         val existingNames = existingProfiles.map { it.name }.toSet()
         if (baseName !in existingNames) return baseName
@@ -710,7 +1001,9 @@ class MusicViewModelFactory(
     private val songStorage: SongStorage,
     private val playbackStateStore: PlaybackStateStore,
     private val cloudSyncService: CloudSyncService,
-    private val ossClientFactory: OssClientFactory
+    private val ossClientFactory: OssClientFactory,
+    private val musicdlApiClient: MusicdlApiClient,
+    private val musicdlSettingsStore: MusicdlSettingsStore
 ) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         if (modelClass.isAssignableFrom(MusicViewModel::class.java)) {
@@ -721,7 +1014,9 @@ class MusicViewModelFactory(
                 songStorage,
                 playbackStateStore,
                 cloudSyncService,
-                ossClientFactory
+                ossClientFactory,
+                musicdlApiClient,
+                musicdlSettingsStore
             ) as T
         }
         throw IllegalArgumentException("Unknown ViewModel class")

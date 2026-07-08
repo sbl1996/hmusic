@@ -6,8 +6,8 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 
 @Database(
-    entities = [SongEntity::class, RemoteSongEntity::class, BackupProfileEntity::class],
-    version = 6,
+    entities = [SongEntity::class, RemoteSongEntity::class, BackupProfileEntity::class, MusicdlDownloadEntity::class],
+    version = 7,
     exportSchema = false
 )
 abstract class MusicDatabase : RoomDatabase() {
