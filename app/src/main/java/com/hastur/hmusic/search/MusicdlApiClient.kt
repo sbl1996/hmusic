@@ -90,19 +90,23 @@ class MusicdlApiClient(
         baseUrl: String,
         taskId: String,
         disposition: String = "attachment",
-        block: (inputStream: InputStream, contentLength: Long?) -> T
+        rangeStart: Long? = null,
+        block: (inputStream: InputStream, contentLength: Long?, isPartial: Boolean) -> T
     ): T {
-        val request = Request.Builder()
+        val requestBuilder = Request.Builder()
             .url(resolveUrl(baseUrl, "downloads/$taskId/file?disposition=$disposition"))
             .get()
-            .build()
+        if (rangeStart != null && rangeStart > 0L) {
+            requestBuilder.header("Range", "bytes=$rangeStart-")
+        }
+        val request = requestBuilder.build()
         httpClient.newCall(request).execute().use { response ->
             if (!response.isSuccessful) {
                 throw MusicdlApiException("musicdl 文件下载失败：HTTP ${response.code} ${response.message}")
             }
             val body = response.body ?: throw MusicdlApiException("musicdl 文件响应为空")
             return body.byteStream().use { input ->
-                block(input, body.contentLength().takeIf { it >= 0L })
+                block(input, body.contentLength().takeIf { it >= 0L }, response.code == 206)
             }
         }
     }

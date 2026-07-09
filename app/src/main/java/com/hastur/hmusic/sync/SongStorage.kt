@@ -6,6 +6,7 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import java.io.File
 import java.io.FileInputStream
+import java.io.FileOutputStream
 import java.io.InputStream
 import java.security.MessageDigest
 import java.util.Locale
@@ -95,9 +96,62 @@ class SongStorage(private val context: Context) {
         )
     }
 
+    fun partialRemoteBytes(remoteKey: String): Long {
+        return partialRemoteFile(remoteKey).length().takeIf { it > 0L } ?: 0L
+    }
+
+    fun storeRemoteStreamResumable(
+        remoteKey: String,
+        inputStream: InputStream,
+        totalBytes: Long? = null,
+        expectedBytes: Long? = null,
+        append: Boolean = false,
+        onProgress: (bytesRead: Long, totalBytes: Long?) -> Unit = { _, _ -> }
+    ): StoredSongFile {
+        val normalizedName = normalizeFileName(remoteKey.substringAfterLast("/").ifBlank { "track" })
+        val partialFile = partialRemoteFile(remoteKey)
+        var bytesRead = if (append) partialFile.length() else 0L
+        FileOutputStream(partialFile, append).use { output ->
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            while (true) {
+                val read = inputStream.read(buffer)
+                if (read <= 0) break
+                output.write(buffer, 0, read)
+                bytesRead += read
+                onProgress(bytesRead, totalBytes)
+            }
+        }
+        if (expectedBytes != null && bytesRead != expectedBytes) {
+            error("文件下载不完整：已接收 $bytesRead 字节，应为 $expectedBytes 字节")
+        }
+
+        val md5 = fileMd5(partialFile)
+        val finalFile = File(songDir, buildStorageName(md5, normalizedName))
+        if (finalFile.exists()) {
+            partialFile.delete()
+        } else if (!partialFile.renameTo(finalFile)) {
+            partialFile.copyTo(finalFile, overwrite = true)
+            partialFile.delete()
+        }
+
+        return StoredSongFile(
+            md5sum = md5,
+            file = finalFile,
+            fileName = normalizedName,
+            mimeType = mimeTypeFromName(normalizedName),
+            updatedAt = finalFile.lastModified().takeIf { it > 0 } ?: System.currentTimeMillis()
+        )
+    }
+
     fun fileForPath(path: String?): File? {
         if (path.isNullOrBlank()) return null
         return File(path)
+    }
+
+    private fun partialRemoteFile(remoteKey: String): File {
+        val normalizedName = normalizeFileName(remoteKey.substringAfterLast("/").ifBlank { "track" })
+        val stableName = normalizeFileName(remoteKey).ifBlank { normalizedName }
+        return File(songDir, "download-$stableName.part")
     }
 
     private fun queryDisplayName(contentResolver: ContentResolver, uri: Uri): String? {

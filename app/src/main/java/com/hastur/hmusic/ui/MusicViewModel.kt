@@ -6,6 +6,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.hastur.hmusic.data.BackupProfileEntity
 import com.hastur.hmusic.data.MusicdlDownloadEntity
+import com.hastur.hmusic.data.MusicdlPendingDownloadEntity
 import com.hastur.hmusic.data.MusicRepository
 import com.hastur.hmusic.data.RemoteSongEntity
 import com.hastur.hmusic.data.SongEntity
@@ -313,7 +314,29 @@ class MusicViewModel(
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val baseUrl = musicdlBaseUrl.value
-                var task = musicdlApiClient.createDownload(baseUrl, sessionId, item.itemId)
+                val stableKey = musicdlItemStableKey(item)
+                var remoteName = musicdlStorageName(item, null)
+                val pendingDownload = repository.getMusicdlPendingDownload(stableKey)
+                var task = pendingDownload?.let { pending ->
+                    runCatching {
+                        remoteName = pending.remoteName
+                        musicdlApiClient.getDownload(baseUrl, pending.taskId)
+                    }.getOrNull()
+                } ?: musicdlApiClient.createDownload(baseUrl, sessionId, item.itemId).also { created ->
+                    remoteName = musicdlStorageName(item, created.result)
+                    repository.upsertMusicdlPendingDownload(
+                        MusicdlPendingDownloadEntity(
+                            stableKey = stableKey,
+                            taskId = created.taskId,
+                            sessionId = sessionId,
+                            itemId = item.itemId,
+                            remoteName = remoteName
+                        )
+                    )
+                }
+                if (pendingDownload != null && pendingDownload.taskId == task.taskId) {
+                    repository.upsertMusicdlPendingDownload(pendingDownload.copy(updatedAt = System.currentTimeMillis()))
+                }
                 while (isActive && !task.isTerminal) {
                     _transferStates.update {
                         it + (
@@ -329,18 +352,44 @@ class MusicViewModel(
                 }
 
                 if (task.status == "failed") {
+                    repository.deleteMusicdlPendingDownload(stableKey)
                     error(task.error ?: "musicdl 下载失败")
                 }
                 if (task.status != "completed") {
                     error("musicdl 下载未完成")
                 }
 
-                val remoteName = musicdlStorageName(item, task.result)
-                val stored = musicdlApiClient.downloadFile(baseUrl, task.taskId) { input, totalBytes ->
-                    songStorage.storeRemoteStream(
+                remoteName = musicdlStorageName(item, task.result)
+                repository.upsertMusicdlPendingDownload(
+                    MusicdlPendingDownloadEntity(
+                        stableKey = stableKey,
+                        taskId = task.taskId,
+                        sessionId = sessionId,
+                        itemId = item.itemId,
+                        remoteName = remoteName
+                    )
+                )
+                val partialBytes = songStorage.partialRemoteBytes(remoteName)
+                val stored = musicdlApiClient.downloadFile(
+                    baseUrl = baseUrl,
+                    taskId = task.taskId,
+                    rangeStart = partialBytes.takeIf { it > 0L }
+                ) { input, contentLength, isPartial ->
+                    val append = isPartial && partialBytes > 0L
+                    val totalBytes = if (append) {
+                        contentLength?.let { partialBytes + it } ?: item.fileSizeBytes
+                    } else {
+                        contentLength ?: item.fileSizeBytes
+                    }
+                    val expectedBytes = contentLength?.let {
+                        if (append) partialBytes + it else it
+                    }
+                    songStorage.storeRemoteStreamResumable(
                         remoteKey = remoteName,
                         inputStream = input,
-                        totalBytes = totalBytes ?: item.fileSizeBytes
+                        totalBytes = totalBytes,
+                        expectedBytes = expectedBytes,
+                        append = append
                     ) { bytesRead, total ->
                         _transferStates.update {
                             it + (
@@ -379,7 +428,7 @@ class MusicViewModel(
                 repository.insertLocalSong(song)
                 repository.insertMusicdlDownload(
                     MusicdlDownloadEntity(
-                        stableKey = musicdlItemStableKey(item),
+                        stableKey = stableKey,
                         md5sum = song.md5sum,
                         source = item.source.orEmpty(),
                         songName = item.songName.orEmpty(),
@@ -394,8 +443,9 @@ class MusicViewModel(
                         coverUrl = item.coverUrl.orEmpty()
                     )
                 )
+                repository.deleteMusicdlPendingDownload(stableKey)
                 _musicdlSearchState.update { state ->
-                    state.copy(downloadedItemMd5ByKey = state.downloadedItemMd5ByKey + (musicdlItemStableKey(item) to song.md5sum))
+                    state.copy(downloadedItemMd5ByKey = state.downloadedItemMd5ByKey + (stableKey to song.md5sum))
                 }
                 _transferStates.update { it - transferKey }
                 _statusMessageState.value = StatusMessageState.Completed("已下载：${song.title}")

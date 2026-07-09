@@ -39,6 +39,7 @@ class MusicRepository(private val musicDao: MusicDao) {
     suspend fun clearLocalSongs() {
         musicDao.clearLocalSongs()
         musicDao.clearMusicdlDownloads()
+        musicDao.clearMusicdlPendingDownloads()
     }
 
     suspend fun clearRemoteSongs() {
@@ -88,6 +89,18 @@ class MusicRepository(private val musicDao: MusicDao) {
 
     suspend fun insertMusicdlDownload(download: MusicdlDownloadEntity): Long {
         return musicDao.insertMusicdlDownload(download)
+    }
+
+    suspend fun getMusicdlPendingDownload(stableKey: String): MusicdlPendingDownloadEntity? {
+        return musicDao.getMusicdlPendingDownload(stableKey)
+    }
+
+    suspend fun upsertMusicdlPendingDownload(download: MusicdlPendingDownloadEntity) {
+        musicDao.upsertMusicdlPendingDownload(download)
+    }
+
+    suspend fun deleteMusicdlPendingDownload(stableKey: String) {
+        musicDao.deleteMusicdlPendingDownload(stableKey)
     }
 
     suspend fun deleteMusicdlDownloadsByStableKeys(stableKeys: List<String>) {

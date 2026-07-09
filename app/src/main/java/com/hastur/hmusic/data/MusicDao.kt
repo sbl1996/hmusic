@@ -83,6 +83,18 @@ interface MusicDao {
     @Query("DELETE FROM musicdl_downloads WHERE stableKey IN (:stableKeys)")
     suspend fun deleteMusicdlDownloadsByStableKeys(stableKeys: List<String>)
 
+    @Query("SELECT * FROM musicdl_pending_downloads WHERE stableKey = :stableKey LIMIT 1")
+    suspend fun getMusicdlPendingDownload(stableKey: String): MusicdlPendingDownloadEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertMusicdlPendingDownload(download: MusicdlPendingDownloadEntity)
+
+    @Query("DELETE FROM musicdl_pending_downloads WHERE stableKey = :stableKey")
+    suspend fun deleteMusicdlPendingDownload(stableKey: String)
+
+    @Query("DELETE FROM musicdl_pending_downloads")
+    suspend fun clearMusicdlPendingDownloads()
+
     @Transaction
     suspend fun activateBackupProfile(profileId: Long, updatedAt: Long = System.currentTimeMillis()) {
         clearActiveBackupProfiles()
