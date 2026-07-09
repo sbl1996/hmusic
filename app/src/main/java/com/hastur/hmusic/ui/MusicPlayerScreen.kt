@@ -70,12 +70,14 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 
 @Composable
 fun MusicPlayerScreen(
     viewModel: MusicViewModel,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     val songs by viewModel.allSongs.collectAsState()
     val backupProfiles by viewModel.backupProfiles.collectAsState()
     val activeProfile by viewModel.activeProfile.collectAsState()
@@ -99,7 +101,8 @@ fun MusicPlayerScreen(
     var inputTitle by remember { mutableStateOf("") }
     var inputArtist by remember { mutableStateOf("") }
     var isPlaylistExpanded by rememberSaveable { mutableStateOf(true) }
-    var pendingDeleteSong by remember { mutableStateOf<LibrarySongItem?>(null) }
+    var detailsSong by remember { mutableStateOf<LibrarySongItem?>(null) }
+    var pendingStorageAction by remember { mutableStateOf<(() -> Unit)?>(null) }
 
     // Audio file picker launcher
     val filePickerLauncher = rememberLauncherForActivityResult(
@@ -111,6 +114,31 @@ fun MusicPlayerScreen(
             inputTitle = lastSegment.substringBeforeLast(".").ifEmpty { "我的本地音乐" }
             inputArtist = "佚名"
             showAddDialog = true
+        }
+    }
+    val directoryPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        if (uri != null) {
+            runCatching { viewModel.configureSongDirectory(uri) }
+                .onSuccess { pendingStorageAction?.invoke() }
+                .onFailure {
+                    Toast.makeText(context, it.localizedMessage ?: "目录授权失败", Toast.LENGTH_LONG).show()
+                }
+        }
+        pendingStorageAction = null
+    }
+    val runWithSongDirectory: (() -> Unit) -> Unit = { action ->
+        if (viewModel.hasSongDirectory()) {
+            action()
+        } else {
+            pendingStorageAction = action
+            Toast.makeText(
+                context,
+                "请选择 Download/hmusic 目录；没有该目录时可在选择器中创建",
+                Toast.LENGTH_LONG
+            ).show()
+            directoryPickerLauncher.launch(null)
         }
     }
 
@@ -265,7 +293,9 @@ fun MusicPlayerScreen(
 
                     // Local picker button
                     IconButton(
-                        onClick = { filePickerLauncher.launch("audio/*") },
+                        onClick = {
+                            runWithSongDirectory { filePickerLauncher.launch("audio/*") }
+                        },
                         modifier = Modifier
                             .testTag("add_song_button")
                             .clip(CircleShape)
@@ -301,6 +331,11 @@ fun MusicPlayerScreen(
                     onDismissStatusMessage = viewModel::resetStatusMessage,
                     onShowStatusCompleted = viewModel::showStatusCompleted,
                     onShowStatusError = viewModel::showStatusError,
+                    hasSongDirectory = viewModel.hasSongDirectory(),
+                    onChooseSongDirectory = {
+                        pendingStorageAction = null
+                        directoryPickerLauncher.launch(null)
+                    },
                     accentColor = accentNeonColor,
                     textWhite = textWhite,
                     textDim = textDim,
@@ -312,7 +347,9 @@ fun MusicPlayerScreen(
                     transferStates = transferStates,
                     onKeywordChange = viewModel::updateMusicdlKeyword,
                     onSearch = viewModel::searchMusicdl,
-                    onDownload = viewModel::downloadMusicdlItem,
+                    onDownload = { item ->
+                        runWithSongDirectory { viewModel.downloadMusicdlItem(item) }
+                    },
                     accentColor = accentNeonColor,
                     textWhite = textWhite,
                     textDim = textDim,
@@ -397,10 +434,10 @@ fun MusicPlayerScreen(
                                 viewModel.playSong(song)
                             }
                         } else {
-                            viewModel.downloadSong(song)
+                            runWithSongDirectory { viewModel.downloadSong(song) }
                         }
                     },
-                    onDelete = { song -> pendingDeleteSong = song },
+                    onShowDetails = { song -> detailsSong = song },
                     accentColor = accentNeonColor,
                     textWhite = textWhite,
                     textDim = textDim
@@ -411,17 +448,16 @@ fun MusicPlayerScreen(
         }
     }
 
-    pendingDeleteSong?.let { song ->
-        ConfirmationDialog(
-            title = "确认删除歌曲",
-            message = "确定要删除「${song.title}」吗？此操作不可撤销。",
-            confirmLabel = "删除",
-            dismissLabel = "取消",
-            onConfirm = {
-                viewModel.deleteSong(song)
-                pendingDeleteSong = null
+    detailsSong?.let { song ->
+        LocalSongDetailsDialog(
+            song = song,
+            onDelete = { deleteLocalFile ->
+                viewModel.deleteSong(song, deleteLocalFile)
+                detailsSong = null
             },
-            onDismiss = { pendingDeleteSong = null }
+            onDismiss = { detailsSong = null },
+            textWhite = textWhite,
+            textDim = textDim
         )
     }
 
@@ -532,4 +568,99 @@ fun MusicPlayerScreen(
             }
         }
     }
+}
+
+@Composable
+private fun LocalSongDetailsDialog(
+    song: LibrarySongItem,
+    onDelete: (Boolean) -> Unit,
+    onDismiss: () -> Unit,
+    textWhite: Color,
+    textDim: Color
+) {
+    val context = LocalContext.current
+    val songStorage = remember(context) { com.hastur.hmusic.sync.SongStorage(context.applicationContext) }
+    val localPath = song.localSong?.localPath
+    val fileExists = remember(localPath) { songStorage.exists(localPath) }
+    var deleteLocalFile by rememberSaveable(song.md5sum) { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("歌曲详细信息") },
+        text = {
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 480.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                SongDetailRow("文件名称", songStorage.displayName(localPath) ?: song.fileName.ifBlank { "未知" }, textWhite, textDim)
+                SongDetailRow("播放时长", formatDuration(song.durationMs), textWhite, textDim)
+                SongDetailRow("文件大小", songStorage.size(localPath)?.let(::formatFileSize) ?: "文件不存在", textWhite, textDim)
+                SongDetailRow("文件路径", songStorage.displayPath(localPath) ?: "无本地文件", textWhite, textDim)
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(enabled = fileExists) {
+                            deleteLocalFile = !deleteLocalFile
+                        },
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Checkbox(
+                        checked = deleteLocalFile,
+                        onCheckedChange = { deleteLocalFile = it },
+                        enabled = fileExists
+                    )
+                    Text("同时删除本地文件", color = textWhite)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onDelete(deleteLocalFile) },
+                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+            ) {
+                Text("删除")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("取消")
+            }
+        },
+        containerColor = Color(0xFF1A1D24),
+        titleContentColor = textWhite,
+        textContentColor = textDim
+    )
+}
+
+@Composable
+private fun SongDetailRow(
+    label: String,
+    value: String,
+    textWhite: Color,
+    textDim: Color
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        Text(label, color = textDim, fontSize = 12.sp)
+        Text(
+            text = value,
+            color = textWhite,
+            fontSize = 14.sp,
+            fontFamily = if (label == "文件路径") FontFamily.Monospace else FontFamily.Default
+        )
+    }
+}
+
+private fun formatFileSize(bytes: Long): String {
+    if (bytes < 1024) return "$bytes B"
+    val units = arrayOf("KB", "MB", "GB", "TB")
+    var size = bytes.toDouble()
+    var unitIndex = -1
+    do {
+        size /= 1024
+        unitIndex++
+    } while (size >= 1024 && unitIndex < units.lastIndex)
+    return String.format(Locale.getDefault(), "%.2f %s", size, units[unitIndex])
 }

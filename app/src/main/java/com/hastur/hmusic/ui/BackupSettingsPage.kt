@@ -89,6 +89,8 @@ fun BackupSettingsPage(
     onDismissStatusMessage: () -> Unit,
     onShowStatusCompleted: (String) -> Unit,
     onShowStatusError: (String) -> Unit,
+    hasSongDirectory: Boolean,
+    onChooseSongDirectory: () -> Unit,
     accentColor: Color,
     textWhite: Color,
     textDim: Color,
@@ -106,6 +108,49 @@ fun BackupSettingsPage(
                 .verticalScroll(scrollState),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onChooseSongDirectory),
+                shape = RoundedCornerShape(20.dp),
+                color = Color(0x13FFFFFF),
+                border = BorderStroke(1.dp, Color(0x1AFFFFFF))
+            ) {
+                Row(
+                    modifier = Modifier.padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Folder,
+                        contentDescription = null,
+                        tint = accentColor,
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "歌曲存储目录",
+                            color = textWhite,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = if (hasSongDirectory) {
+                                "/storage/emulated/0/Download/hmusic"
+                            } else {
+                                "未授权，请选择 Download/hmusic"
+                            },
+                            color = textDim,
+                            fontSize = 12.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                    TextButton(onClick = onChooseSongDirectory) {
+                        Text(if (hasSongDirectory) "更改" else "选择")
+                    }
+                }
+            }
+
             OssSettingsCard(
                 profiles = profiles,
                 activeProfile = activeProfile,

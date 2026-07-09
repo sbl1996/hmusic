@@ -8,6 +8,7 @@ import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.media.MediaPlayer
+import android.net.Uri
 import android.os.Build
 import android.util.Log
 import com.hastur.hmusic.data.SongEntity
@@ -212,10 +213,15 @@ class MusicPlayerManager(private val context: Context) {
 
             mediaPlayer?.apply {
                 val localPath = song.localPath
-                if (!File(localPath).exists()) {
-                    throw IllegalStateException("Local file missing for ${song.md5sum}")
+                val uri = Uri.parse(localPath)
+                if (uri.scheme == "content") {
+                    setDataSource(context, uri)
+                } else {
+                    if (!File(localPath).exists()) {
+                        throw IllegalStateException("Local file missing for ${song.md5sum}")
+                    }
+                    setDataSource(localPath)
                 }
-                setDataSource(localPath)
                 prepareAsync()
             }
         } catch (e: Exception) {

@@ -154,6 +154,7 @@ fun ArtworkThumbnail(
 
 @Composable
 private fun rememberEmbeddedArtwork(filePath: String?): ImageBitmap? {
+    val context = LocalContext.current
     val resolvedPath = filePath?.takeIf { it.isNotBlank() }
     return produceState<ImageBitmap?>(initialValue = null, key1 = resolvedPath) {
         value = if (resolvedPath == null) {
@@ -163,7 +164,12 @@ private fun rememberEmbeddedArtwork(filePath: String?): ImageBitmap? {
                 runCatching {
                     val retriever = MediaMetadataRetriever()
                     try {
-                        retriever.setDataSource(resolvedPath)
+                        val uri = Uri.parse(resolvedPath)
+                        if (uri.scheme == "content") {
+                            retriever.setDataSource(context, uri)
+                        } else {
+                            retriever.setDataSource(resolvedPath)
+                        }
                         val bytes = retriever.embeddedPicture ?: return@runCatching null
                         BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
                     } finally {
@@ -174,4 +180,3 @@ private fun rememberEmbeddedArtwork(filePath: String?): ImageBitmap? {
         }
     }.value
 }
-

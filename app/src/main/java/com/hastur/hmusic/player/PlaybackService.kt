@@ -14,6 +14,7 @@ import android.media.MediaMetadata
 import android.media.MediaMetadataRetriever
 import android.media.session.MediaSession
 import android.media.session.PlaybackState
+import android.net.Uri
 import android.os.Build
 import android.os.IBinder
 import android.os.SystemClock
@@ -230,7 +231,12 @@ class PlaybackService : Service() {
         return runCatching {
             val retriever = MediaMetadataRetriever()
             try {
-                retriever.setDataSource(localPath)
+                val uri = Uri.parse(localPath)
+                if (uri.scheme == "content") {
+                    retriever.setDataSource(this, uri)
+                } else {
+                    retriever.setDataSource(localPath)
+                }
                 val art = retriever.embeddedPicture ?: return@runCatching null
                 BitmapFactory.decodeByteArray(art, 0, art.size)
             } finally {

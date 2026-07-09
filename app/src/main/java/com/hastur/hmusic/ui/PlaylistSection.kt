@@ -12,11 +12,13 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
@@ -71,6 +73,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun SongItemRow(
     song: LibrarySongItem,
@@ -78,7 +81,7 @@ fun SongItemRow(
     isPlayingResponse: Boolean,
     transferState: SongTransferState,
     onSelection: () -> Unit,
-    onDelete: () -> Unit,
+    onShowDetails: () -> Unit,
     cardBg: Color,
     activeBg: Color,
     accentColor: Color,
@@ -102,7 +105,13 @@ fun SongItemRow(
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(enabled = !isRunning) { onSelection() }
+            .combinedClickable(
+                enabled = !isRunning,
+                onClick = onSelection,
+                onLongClick = {
+                    if (song.isDownloaded) onShowDetails()
+                }
+            )
             .testTag("song_item_${song.title}"),
         shape = RoundedCornerShape(16.dp),
         color = if (isActive) Color(0x24D0BCFF) else Color(0x09FFFFFF),
@@ -190,7 +199,7 @@ fun SongItemRow(
                 )
             } else {
                 IconButton(
-                    onClick = { onDelete() },
+                    onClick = onShowDetails,
                     modifier = Modifier.size(24.dp)
                 ) {
                     Icon(
@@ -268,7 +277,7 @@ fun PlaylistSection(
     isExpanded: Boolean,
     onToggleExpanded: () -> Unit,
     onSelection: (LibrarySongItem, SongTransferState) -> Unit,
-    onDelete: (LibrarySongItem) -> Unit,
+    onShowDetails: (LibrarySongItem) -> Unit,
     accentColor: Color,
     textWhite: Color,
     textDim: Color
@@ -355,7 +364,7 @@ fun PlaylistSection(
                                 isPlayingResponse = isPlaying && isActive,
                                 transferState = transferState,
                                 onSelection = { onSelection(song, transferState) },
-                                onDelete = { onDelete(song) },
+                                onShowDetails = { onShowDetails(song) },
                                 cardBg = Color(0x09FFFFFF),
                                 activeBg = Color(0x24D0BCFF),
                                 accentColor = accentColor,
@@ -369,4 +378,3 @@ fun PlaylistSection(
         }
     }
 }
-

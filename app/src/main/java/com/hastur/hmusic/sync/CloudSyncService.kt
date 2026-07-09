@@ -4,7 +4,6 @@ import com.hastur.hmusic.data.BackupProfileEntity
 import com.hastur.hmusic.data.MusicRepository
 import com.hastur.hmusic.data.RemoteSongEntity
 import com.hastur.hmusic.data.SongEntity
-import java.io.File
 
 data class DownloadSongResult(
     val songTitle: String
@@ -44,7 +43,7 @@ class CloudSyncService(
             )
         }
         if (stored.md5sum != song.md5sum) {
-            stored.file.delete()
+            songStorage.delete(stored.localPath)
             error("下载后的文件校验失败")
         }
 
@@ -56,7 +55,7 @@ class CloudSyncService(
             durationMs = if (song.durationMs > 0) song.durationMs else existingLocalSong?.durationMs ?: 0,
             fileName = song.fileName.ifBlank { stored.fileName },
             mimeType = song.mimeType.ifBlank { stored.mimeType },
-            localPath = stored.file.absolutePath,
+            localPath = stored.localPath,
             localUpdatedAt = stored.updatedAt,
             syncTime = System.currentTimeMillis()
         )
@@ -70,18 +69,20 @@ class CloudSyncService(
         localSong: SongEntity,
         currentRemoteSongs: List<RemoteSongEntity>
     ): UploadSongResult {
-        val localFile = File(localSong.localPath)
-        if (!localFile.exists()) {
+        if (!songStorage.exists(localSong.localPath)) {
             error("本地文件不存在")
         }
 
         val now = System.currentTimeMillis()
         val remoteSong = remoteSongSyncAssembler.buildRemoteSongEntity(profile.id, localSong, client, now)
-        client.uploadSongFile(
-            remoteKey = remoteSong.remoteKey,
-            file = localFile,
-            mimeType = localSong.mimeType
-        )
+        songStorage.openInputStream(localSong.localPath).use { input ->
+            client.uploadSongStream(
+                remoteKey = remoteSong.remoteKey,
+                inputStream = input,
+                contentLength = songStorage.size(localSong.localPath) ?: error("无法获取本地文件大小"),
+                mimeType = localSong.mimeType
+            )
+        }
 
         val mergedRemoteSongs = remoteSongSyncAssembler.mergeRemoteSongs(
             profileId = profile.id,
@@ -122,7 +123,14 @@ class CloudSyncService(
                     client,
                     now
                 )
-                client.uploadSongFile(remoteSong.remoteKey, File(localSong.localPath), localSong.mimeType)
+                songStorage.openInputStream(localSong.localPath).use { input ->
+                    client.uploadSongStream(
+                        remoteSong.remoteKey,
+                        input,
+                        songStorage.size(localSong.localPath) ?: error("无法获取本地文件大小"),
+                        localSong.mimeType
+                    )
+                }
                 remoteSong
             }
 

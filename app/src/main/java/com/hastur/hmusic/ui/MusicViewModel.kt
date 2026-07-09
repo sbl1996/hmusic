@@ -1,6 +1,7 @@
 package com.hastur.hmusic.ui
 
 import android.media.MediaMetadataRetriever
+import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -414,14 +415,14 @@ class MusicViewModel(
                         .ifBlank { task.result?.singers?.trim().orEmpty() }
                         .ifBlank { existing?.artist ?: "佚名" },
                     durationMs = resolveImportedSongDuration(
-                        filePath = stored.file.absolutePath,
+                        filePath = stored.localPath,
                         fallbackDurationMs = item.durationSeconds?.times(1000)
                             ?: existing?.durationMs
                             ?: 0L
                     ),
                     fileName = stored.fileName,
                     mimeType = stored.mimeType,
-                    localPath = stored.file.absolutePath,
+                    localPath = stored.localPath,
                     localUpdatedAt = stored.updatedAt,
                     syncTime = System.currentTimeMillis()
                 )
@@ -562,13 +563,13 @@ class MusicViewModel(
 
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val localFile = File(localSong.localPath)
+                val localFileSize = songStorage.size(localSong.localPath) ?: 0L
                 _transferStates.update {
                     it + (
                         songKey to SongTransferState.Running(
                             SongTransferDirection.UPLOAD,
-                            bytesRead = localFile.length(),
-                            totalBytes = localFile.length()
+                            bytesRead = localFileSize,
+                            totalBytes = localFileSize
                         )
                     )
                 }
@@ -790,12 +791,12 @@ class MusicViewModel(
                     title = title.trim().ifBlank { existing?.title ?: stored.fileName.substringBeforeLast(".") },
                     artist = artist.trim().ifBlank { existing?.artist ?: "佚名" },
                     durationMs = resolveImportedSongDuration(
-                        filePath = stored.file.absolutePath,
+                        filePath = stored.localPath,
                         fallbackDurationMs = existing?.durationMs ?: 0L
                     ),
                     fileName = stored.fileName,
                     mimeType = stored.mimeType,
-                    localPath = stored.file.absolutePath,
+                    localPath = stored.localPath,
                     localUpdatedAt = stored.updatedAt,
                     syncTime = System.currentTimeMillis()
                 )
@@ -811,9 +812,15 @@ class MusicViewModel(
         }
     }
 
-    fun deleteSong(song: LibrarySongItem) {
+    fun deleteSong(song: LibrarySongItem, deleteLocalFile: Boolean = false) {
         val localSong = song.localSong ?: return
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
+            if (deleteLocalFile) {
+                if (songStorage.exists(localSong.localPath) && !songStorage.delete(localSong.localPath)) {
+                    _statusMessageState.value = StatusMessageState.Error("删除本地文件失败：${localSong.fileName}")
+                    return@launch
+                }
+            }
             repository.deleteLocalSong(localSong)
         }
     }
@@ -857,11 +864,7 @@ class MusicViewModel(
     }
 
     private fun localSongFileSize(song: SongEntity): Long? {
-        return song.localPath.takeIf { it.isNotBlank() }
-            ?.let(::File)
-            ?.takeIf(File::exists)
-            ?.length()
-            ?.takeIf { it > 0L }
+        return songStorage.size(song.localPath)?.takeIf { it > 0L }
     }
 
     private suspend fun restorePlaybackState() {
@@ -1030,18 +1033,14 @@ class MusicViewModel(
     }
 
     private fun extractDurationMs(filePath: String): Long {
-        return runCatching {
-            val retriever = MediaMetadataRetriever()
-            try {
-                retriever.setDataSource(filePath)
-                retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
-                    ?.toLongOrNull()
-                    ?.coerceAtLeast(0L)
-                    ?: 0L
-            } finally {
-                retriever.release()
-            }
-        }.getOrDefault(0L)
+        return songStorage.durationMs(filePath)
+    }
+
+    fun hasSongDirectory(): Boolean = songStorage.hasConfiguredDirectory()
+
+    fun configureSongDirectory(uri: Uri) {
+        songStorage.configureDirectory(uri)
+        _statusMessageState.value = StatusMessageState.Completed("歌曲存储目录已设置")
     }
 }
 

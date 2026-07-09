@@ -108,6 +108,21 @@ class OssClient(
         return remoteKey
     }
 
+    suspend fun uploadSongStream(
+        remoteKey: String,
+        inputStream: InputStream,
+        contentLength: Long,
+        mimeType: String
+    ): String {
+        val request = PutObjectRequest.builder()
+            .bucket(bucket)
+            .key(remoteKey)
+            .contentType(mimeType.ifBlank { "application/octet-stream" })
+            .build()
+        s3Client.putObject(request, RequestBody.fromInputStream(inputStream, contentLength))
+        return remoteKey
+    }
+
     suspend fun downloadSongStream(remoteKey: String): RemoteSongStream {
         val request = GetObjectRequest.builder()
             .bucket(bucket)

@@ -3,6 +3,7 @@ package com.hastur.hmusic.data
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
+import android.net.Uri
 import java.io.File
 
 @Entity(
@@ -22,5 +23,7 @@ data class SongEntity(
     val syncTime: Long = System.currentTimeMillis()
 ) {
     val isDownloaded: Boolean
-        get() = localPath.isNotBlank() && File(localPath).exists()
+        get() = localPath.isNotBlank() && (
+            Uri.parse(localPath).scheme == "content" || File(localPath).exists()
+        )
 }
