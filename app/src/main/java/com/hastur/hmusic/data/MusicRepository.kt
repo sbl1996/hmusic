@@ -36,12 +36,6 @@ class MusicRepository(private val musicDao: MusicDao) {
         musicDao.deleteMusicdlDownloadsByMd5(song.md5sum)
     }
 
-    suspend fun clearLocalSongs() {
-        musicDao.clearLocalSongs()
-        musicDao.clearMusicdlDownloads()
-        musicDao.clearMusicdlPendingDownloads()
-    }
-
     suspend fun clearRemoteSongs() {
         musicDao.clearRemoteSongs()
     }

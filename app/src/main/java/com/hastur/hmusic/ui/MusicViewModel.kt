@@ -108,6 +108,12 @@ data class MusicdlSearchUiState(
     val lastSources: List<String> = emptyList()
 )
 
+data class LocalScanState(
+    val isScanning: Boolean = false,
+    val scanned: Int = 0,
+    val total: Int = 0
+)
+
 @OptIn(ExperimentalCoroutinesApi::class)
 class MusicViewModel(
     private val repository: MusicRepository,
@@ -127,6 +133,9 @@ class MusicViewModel(
 
     private val _musicdlSearchState = MutableStateFlow(MusicdlSearchUiState())
     val musicdlSearchState: StateFlow<MusicdlSearchUiState> = _musicdlSearchState.asStateFlow()
+
+    private val _localScanState = MutableStateFlow(LocalScanState())
+    val localScanState: StateFlow<LocalScanState> = _localScanState.asStateFlow()
 
     val musicdlBaseUrl: StateFlow<String> = musicdlSettingsStore.baseUrlFlow
         .stateIn(
@@ -371,6 +380,12 @@ class MusicViewModel(
                     )
                 )
                 val partialBytes = songStorage.partialRemoteBytes(remoteName)
+                val downloadTitle = item.songName?.trim().orEmpty()
+                    .ifBlank { task.result?.songName?.trim().orEmpty() }
+                    .ifBlank { remoteName.substringBeforeLast(".") }
+                val downloadArtist = item.singers?.trim().orEmpty()
+                    .ifBlank { task.result?.singers?.trim().orEmpty() }
+                    .ifBlank { "佚名" }
                 val stored = musicdlApiClient.downloadFile(
                     baseUrl = baseUrl,
                     taskId = task.taskId,
@@ -388,6 +403,8 @@ class MusicViewModel(
                     songStorage.storeRemoteStreamResumable(
                         remoteKey = remoteName,
                         inputStream = input,
+                        title = downloadTitle,
+                        artist = downloadArtist,
                         totalBytes = totalBytes,
                         expectedBytes = expectedBytes,
                         append = append
@@ -408,11 +425,9 @@ class MusicViewModel(
                 val song = SongEntity(
                     id = existing?.id ?: 0,
                     md5sum = stored.md5sum,
-                    title = item.songName?.trim().orEmpty()
-                        .ifBlank { task.result?.songName?.trim().orEmpty() }
+                    title = downloadTitle
                         .ifBlank { existing?.title ?: stored.fileName.substringBeforeLast(".") },
-                    artist = item.singers?.trim().orEmpty()
-                        .ifBlank { task.result?.singers?.trim().orEmpty() }
+                    artist = downloadArtist
                         .ifBlank { existing?.artist ?: "佚名" },
                     durationMs = resolveImportedSongDuration(
                         filePath = stored.localPath,
@@ -580,7 +595,7 @@ class MusicViewModel(
                     currentRemoteSongs = remoteSongs.value
                 )
                 _transferStates.update { it - songKey }
-                _statusMessageState.value = StatusMessageState.Completed("已备份到云端：${result.songTitle}")
+                _statusMessageState.value = StatusMessageState.Completed("已上传到云端：${result.songTitle}")
             } catch (e: Exception) {
                 _transferStates.update {
                     it + (
@@ -757,39 +772,22 @@ class MusicViewModel(
         }
     }
 
-    fun backupPlaylistToOSS() {
-        val profile = activeProfile.value
-        val client = ossClient
-        if (profile == null || client == null) {
-            _statusMessageState.value = StatusMessageState.Error("请先配置 S3 / OSS Profile 后再上传备份")
-            return
-        }
-        _statusMessageState.value = StatusMessageState.Loading
-
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                cloudSyncService.backupPlaylist(
-                    profile = profile,
-                    client = client,
-                    localSongs = localSongs.value
-                )
-                _statusMessageState.value = StatusMessageState.Completed("已备份到 ${profile.name}，歌单索引已刷新")
-            } catch (e: Exception) {
-                _statusMessageState.value = StatusMessageState.Error("上传备份失败: ${e.localizedMessage}")
-            }
-        }
-    }
-
     fun addLocalSong(title: String, artist: String, uri: String) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val stored = songStorage.importFromUri(uri)
+                val normalizedTitle = title.trim()
+                val normalizedArtist = artist.trim()
+                val stored = songStorage.importFromUri(
+                    uriString = uri,
+                    title = normalizedTitle,
+                    artist = normalizedArtist
+                )
                 val existing = repository.findLocalSongByMd5(stored.md5sum)
                 val song = SongEntity(
                     id = existing?.id ?: 0,
                     md5sum = stored.md5sum,
-                    title = title.trim().ifBlank { existing?.title ?: stored.fileName.substringBeforeLast(".") },
-                    artist = artist.trim().ifBlank { existing?.artist ?: "佚名" },
+                    title = normalizedTitle.ifBlank { existing?.title ?: stored.fileName.substringBeforeLast(".") },
+                    artist = normalizedArtist.ifBlank { existing?.artist ?: "佚名" },
                     durationMs = resolveImportedSongDuration(
                         filePath = stored.localPath,
                         fallbackDurationMs = existing?.durationMs ?: 0L
@@ -812,6 +810,78 @@ class MusicViewModel(
         }
     }
 
+    fun scanAndRestoreLocalSongs() {
+        if (_localScanState.value.isScanning) return
+        if (!songStorage.hasConfiguredDirectory()) {
+            _statusMessageState.value = StatusMessageState.Error("请先选择歌曲存储目录")
+            return
+        }
+
+        _localScanState.value = LocalScanState(isScanning = true)
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val localSnapshot = localSongs.value
+                val existingMd5 = localSnapshot.mapTo(mutableSetOf()) { it.md5sum }
+                val knownLocalPaths = localSnapshot
+                    .mapNotNullTo(mutableSetOf()) { song ->
+                        song.localPath.takeIf(String::isNotBlank)
+                    }
+                val remoteByMd5 = remoteSongs.value.associateBy { it.md5sum }
+                var restoredCount = 0
+                var restoredFromCloudCount = 0
+                val scannedFiles = songStorage.scanConfiguredDirectory(
+                    knownLocalPaths = knownLocalPaths,
+                    onProgress = { scanned, total ->
+                        _localScanState.value = LocalScanState(
+                            isScanning = true,
+                            scanned = scanned,
+                            total = total
+                        )
+                    }
+                )
+
+                scannedFiles.forEach { scanned ->
+                    if (!existingMd5.add(scanned.md5sum)) return@forEach
+                    val remote = remoteByMd5[scanned.md5sum]
+                    val parsedName = parseReadableSongFileName(scanned.fileName)
+                    repository.insertLocalSong(
+                        SongEntity(
+                            md5sum = scanned.md5sum,
+                            title = remote?.title?.takeIf(String::isNotBlank)
+                                ?: scanned.embeddedTitle
+                                ?: parsedName.second,
+                            artist = remote?.artist?.takeIf(String::isNotBlank)
+                                ?: scanned.embeddedArtist
+                                ?: parsedName.first,
+                            durationMs = remote?.durationMs?.takeIf { it > 0 }
+                                ?: scanned.durationMs,
+                            fileName = scanned.fileName,
+                            mimeType = scanned.mimeType,
+                            localPath = scanned.localPath,
+                            localUpdatedAt = scanned.updatedAt,
+                            syncTime = System.currentTimeMillis()
+                        )
+                    )
+                    restoredCount += 1
+                    if (remote != null) restoredFromCloudCount += 1
+                }
+
+                _statusMessageState.value = if (restoredCount == 0) {
+                    StatusMessageState.Completed("扫描完成，没有发现需要恢复的歌曲")
+                } else {
+                    StatusMessageState.Completed(
+                        "已恢复 $restoredCount 首歌曲，其中 $restoredFromCloudCount 首使用云端信息"
+                    )
+                }
+            } catch (e: Exception) {
+                _statusMessageState.value =
+                    StatusMessageState.Error("扫描本地歌曲失败：${e.localizedMessage}")
+            } finally {
+                _localScanState.value = LocalScanState()
+            }
+        }
+    }
+
     fun deleteSong(song: LibrarySongItem, deleteLocalFile: Boolean = false) {
         val localSong = song.localSong ?: return
         viewModelScope.launch(Dispatchers.IO) {
@@ -822,13 +892,6 @@ class MusicViewModel(
                 }
             }
             repository.deleteLocalSong(localSong)
-        }
-    }
-
-    fun clearPlaylist() {
-        viewModelScope.launch {
-            repository.clearLocalSongs()
-            playbackStateStore.clear()
         }
     }
 
@@ -939,6 +1002,17 @@ class MusicViewModel(
                 remoteSong = remote
             )
         }
+    }
+
+    private fun parseReadableSongFileName(fileName: String): Pair<String, String> {
+        val baseName = fileName.substringBeforeLast(".")
+        val separatorIndex = baseName.indexOf(" - ")
+        if (separatorIndex < 0) {
+            return "佚名" to baseName.ifBlank { "未知歌曲" }
+        }
+        val artist = baseName.substring(0, separatorIndex).trim().ifBlank { "佚名" }
+        val title = baseName.substring(separatorIndex + 3).trim().ifBlank { "未知歌曲" }
+        return artist to title
     }
 
     private fun MusicdlSearchResponse.toUiState(

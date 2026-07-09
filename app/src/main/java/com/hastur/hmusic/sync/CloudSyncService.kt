@@ -17,10 +17,6 @@ data class SyncFromCloudResult(
     val remoteSongCount: Int
 )
 
-data class BackupPlaylistResult(
-    val uploadedSongCount: Int
-)
-
 class CloudSyncService(
     private val repository: MusicRepository,
     private val manifestStore: CloudPlaylistManifestStore,
@@ -38,6 +34,8 @@ class CloudSyncService(
             songStorage.storeRemoteStream(
                 remoteKey = song.remoteKey,
                 inputStream = it,
+                title = song.title,
+                artist = song.artist,
                 totalBytes = remoteStream.contentLength,
                 onProgress = onProgress
             )
@@ -53,7 +51,7 @@ class CloudSyncService(
             title = existingLocalSong?.title ?: song.title,
             artist = existingLocalSong?.artist ?: song.artist,
             durationMs = if (song.durationMs > 0) song.durationMs else existingLocalSong?.durationMs ?: 0,
-            fileName = song.fileName.ifBlank { stored.fileName },
+            fileName = stored.fileName,
             mimeType = song.mimeType.ifBlank { stored.mimeType },
             localPath = stored.localPath,
             localUpdatedAt = stored.updatedAt,
@@ -106,38 +104,6 @@ class CloudSyncService(
         repository.replaceRemoteSongs(profile.id, remoteEntities)
         touchProfileLastSync(profile)
         return SyncFromCloudResult(remoteSongCount = remoteEntities.size)
-    }
-
-    suspend fun backupPlaylist(
-        profile: BackupProfileEntity,
-        client: OssClient,
-        localSongs: List<SongEntity>
-    ): BackupPlaylistResult {
-        val now = System.currentTimeMillis()
-        val syncedRemoteSongs = localSongs
-            .filter { it.isDownloaded }
-            .map { localSong ->
-                val remoteSong = remoteSongSyncAssembler.buildRemoteSongEntity(
-                    profile.id,
-                    localSong,
-                    client,
-                    now
-                )
-                songStorage.openInputStream(localSong.localPath).use { input ->
-                    client.uploadSongStream(
-                        remoteSong.remoteKey,
-                        input,
-                        songStorage.size(localSong.localPath) ?: error("无法获取本地文件大小"),
-                        localSong.mimeType
-                    )
-                }
-                remoteSong
-            }
-
-        manifestStore.save(client, syncedRemoteSongs, now)
-        repository.replaceRemoteSongs(profile.id, syncedRemoteSongs)
-        touchProfileLastSync(profile, now)
-        return BackupPlaylistResult(uploadedSongCount = syncedRemoteSongs.size)
     }
 
     private suspend fun touchProfileLastSync(

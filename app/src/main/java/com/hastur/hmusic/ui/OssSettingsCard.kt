@@ -79,13 +79,9 @@ fun OssSettingsCard(
     onCreateProfile: (Boolean) -> Unit,
     onSwitchProfile: (Long) -> Unit,
     onDeleteProfile: () -> Unit,
-    onBackup: () -> Unit,
-    onSyncPlaylist: () -> Unit,
     onSync: () -> Unit,
-    onClearPlaylist: () -> Unit,
     onShowStatusCompleted: (String) -> Unit,
     onShowStatusError: (String) -> Unit,
-    cardBackground: Color,
     accentColor: Color,
     textWhite: Color,
     textDim: Color
@@ -95,8 +91,6 @@ fun OssSettingsCard(
     val coroutineScope = rememberCoroutineScope()
     var profileMenuExpanded by remember { mutableStateOf(false) }
     var showDeleteProfileConfirm by remember { mutableStateOf(false) }
-    var showBackupConfirm by remember { mutableStateOf(false) }
-    var showClearPlaylistConfirm by remember { mutableStateOf(false) }
     var autoFillClipboardCandidate by remember { mutableStateOf<ClipboardConfigCandidate?>(null) }
     var profileName by remember(activeProfile) { mutableStateOf(activeProfile?.name ?: "") }
     var endpoint by remember(activeProfile) { mutableStateOf(activeProfile?.endpoint ?: "") }
@@ -107,6 +101,7 @@ fun OssSettingsCard(
     var sk by remember(activeProfile) { mutableStateOf(activeProfile?.accessKeySecret ?: "") }
     var prefix by remember(activeProfile) { mutableStateOf(activeProfile?.prefix ?: "") }
     var skVisible by remember { mutableStateOf(false) }
+    var showAdvancedSettings by rememberSaveable { mutableStateOf(false) }
 
     fun applyClipboardConfig(candidate: ClipboardConfigCandidate) {
         endpoint = candidate.parsed.endpoint ?: endpoint
@@ -225,6 +220,85 @@ fun OssSettingsCard(
             }
 
             Spacer(modifier = Modifier.height(8.dp))
+
+            Text(
+                text = when {
+                    activeProfile == null -> "尚未选择云端配置"
+                    activeProfile.bucket.isBlank() -> "配置尚未完成"
+                    else -> "${activeProfile.bucket} · ${activeProfile.endpoint}"
+                },
+                color = textDim,
+                fontSize = 12.sp,
+                fontFamily = FontFamily.Monospace,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(horizontal = 4.dp)
+            )
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Button(
+                onClick = onSync,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = accentColor,
+                    contentColor = Color(0xFF21005D)
+                ),
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Sync,
+                    contentDescription = "同步云端列表",
+                    modifier = Modifier.size(15.dp)
+                )
+                Spacer(modifier = Modifier.width(5.dp))
+                Text("立即同步", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { showAdvancedSettings = !showAdvancedSettings }
+                    .testTag("cloud_advanced_settings_toggle"),
+                shape = RoundedCornerShape(14.dp),
+                color = Color(0x0AFFFFFF),
+                border = BorderStroke(1.dp, Color(0x14FFFFFF))
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 11.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Tune,
+                        contentDescription = null,
+                        tint = accentColor,
+                        modifier = Modifier.size(17.dp)
+                    )
+                    Spacer(modifier = Modifier.width(9.dp))
+                    Text(
+                        text = "编辑云端配置",
+                        color = textWhite,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Icon(
+                        imageVector = if (showAdvancedSettings) {
+                            Icons.Filled.ExpandLess
+                        } else {
+                            Icons.Filled.ExpandMore
+                        },
+                        contentDescription = if (showAdvancedSettings) "收起" else "展开",
+                        tint = textDim
+                    )
+                }
+            }
+
+            AnimatedVisibility(visible = showAdvancedSettings) {
+                Column {
+                    Spacer(modifier = Modifier.height(8.dp))
 
             OutlinedTextField(
                 value = profileName,
@@ -396,34 +470,17 @@ fun OssSettingsCard(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            Button(
+                onClick = { onSave(profileName, endpoint, region, forcePathStyle, bucket, ak, sk, prefix) },
+                colors = ButtonDefaults.buttonColors(containerColor = accentColor, contentColor = Color(0xFF21005D)),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("save_settings_button"),
+                shape = RoundedCornerShape(12.dp)
             ) {
-                Button(
-                    onClick = { onSave(profileName, endpoint, region, forcePathStyle, bucket, ak, sk, prefix) },
-                    colors = ButtonDefaults.buttonColors(containerColor = accentColor, contentColor = Color(0xFF21005D)),
-                    modifier = Modifier
-                        .weight(1f)
-                        .testTag("save_settings_button"),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Icon(imageVector = Icons.Filled.Save, contentDescription = "Save settings", modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("保存配置", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                }
-
-                Button(
-                    onClick = onSync,
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0x14FFFFFF), contentColor = textWhite),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x1AFFFFFF)),
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Icon(imageVector = Icons.Filled.Sync, contentDescription = "Sync manifest", modifier = Modifier.size(14.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("仅同步列表", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                }
+                Icon(imageVector = Icons.Filled.Save, contentDescription = "Save settings", modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("保存配置", fontWeight = FontWeight.Bold, fontSize = 13.sp)
             }
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -500,92 +557,36 @@ fun OssSettingsCard(
                 }
             }
 
+                }
+            }
+
             Spacer(modifier = Modifier.height(8.dp))
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Button(
-                    onClick = { showBackupConfirm = true },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0x14FFFFFF), contentColor = textWhite),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x1AFFFFFF)),
-                    modifier = Modifier
-                        .weight(1f)
-                        .testTag("cloud_backup_button"),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Icon(imageVector = Icons.Filled.CloudUpload, contentDescription = "Backup", modifier = Modifier.size(14.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("备份到云端", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            AnimatedVisibility(visible = showAdvancedSettings) {
+                Column {
+                    Button(
+                        onClick = { showDeleteProfileConfirm = true },
+                        enabled = profiles.size > 1,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0x33B3261E),
+                            contentColor = Color(0xFFFFDAD6),
+                            disabledContainerColor = Color(0x14FFFFFF),
+                            disabledContentColor = textDim
+                        ),
+                        border = BorderStroke(
+                            1.dp,
+                            if (profiles.size > 1) Color(0x66FF8A80) else Color(0x1AFFFFFF)
+                        ),
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(imageVector = Icons.Filled.Delete, contentDescription = "Delete current profile", modifier = Modifier.size(14.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("删除当前配置", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
                 }
-
-                Button(
-                    onClick = { showClearPlaylistConfirm = true },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0x14FFFFFF), contentColor = textWhite),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x1AFFFFFF)),
-                    modifier = Modifier
-                        .weight(1f)
-                        .testTag("clear_playlist_button"),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Icon(imageVector = Icons.Filled.DeleteSweep, contentDescription = "Clear local list", modifier = Modifier.size(14.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("清空本地列表", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                }
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            Button(
-                onClick = { showDeleteProfileConfirm = true },
-                enabled = profiles.size > 1,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0x33B3261E),
-                    contentColor = Color(0xFFFFDAD6),
-                    disabledContainerColor = Color(0x14FFFFFF),
-                    disabledContentColor = textDim
-                ),
-                border = androidx.compose.foundation.BorderStroke(
-                    1.dp,
-                    if (profiles.size > 1) Color(0x66FF8A80) else Color(0x1AFFFFFF)
-                ),
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Icon(imageVector = Icons.Filled.Delete, contentDescription = "Delete current profile", modifier = Modifier.size(14.dp))
-                Spacer(modifier = Modifier.width(4.dp))
-                Text("删除当前配置", fontSize = 11.sp, fontWeight = FontWeight.Bold)
             }
         }
-    }
-
-    if (showBackupConfirm) {
-        ConfirmationDialog(
-            title = "确认备份到云端",
-            message = "确定要备份到当前配置「$profileName」吗？这会上传本地歌曲，并覆盖当前配置的云端歌单索引。",
-            confirmLabel = "继续备份",
-            dismissLabel = "取消",
-            onConfirm = {
-                onBackup()
-                showBackupConfirm = false
-            },
-            onDismiss = { showBackupConfirm = false }
-        )
-    }
-
-    if (showClearPlaylistConfirm) {
-        ConfirmationDialog(
-            title = "确认清空本地列表",
-            message = "确定要清空本地列表吗？这会删除本地歌曲记录并清除播放状态。",
-            confirmLabel = "清空",
-            dismissLabel = "取消",
-            onConfirm = {
-                onClearPlaylist()
-                showClearPlaylistConfirm = false
-            },
-            onDismiss = { showClearPlaylistConfirm = false }
-        )
     }
 
     if (showDeleteProfileConfirm) {
@@ -642,4 +643,3 @@ fun OssSettingsCard(
         )
     }
 }
-

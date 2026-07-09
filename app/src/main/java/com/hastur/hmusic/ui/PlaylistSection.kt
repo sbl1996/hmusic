@@ -81,6 +81,7 @@ fun SongItemRow(
     isPlayingResponse: Boolean,
     transferState: SongTransferState,
     onSelection: () -> Unit,
+    onPlaybackToggle: () -> Unit,
     onShowDetails: () -> Unit,
     cardBg: Color,
     activeBg: Color,
@@ -199,14 +200,16 @@ fun SongItemRow(
                 )
             } else {
                 IconButton(
-                    onClick = onShowDetails,
-                    modifier = Modifier.size(24.dp)
+                    onClick = onPlaybackToggle,
+                    modifier = Modifier
+                        .size(32.dp)
+                        .testTag("song_play_pause_${song.title}")
                 ) {
                     Icon(
-                        imageVector = Icons.Filled.Delete,
-                        contentDescription = "Remove track",
-                        tint = textDim.copy(alpha = 0.6f),
-                        modifier = Modifier.size(16.dp)
+                        imageVector = if (isPlayingResponse) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                        contentDescription = if (isPlayingResponse) "暂停" else "播放",
+                        tint = if (isActive) accentColor else textDim,
+                        modifier = Modifier.size(20.dp)
                     )
                 }
             }
@@ -277,6 +280,7 @@ fun PlaylistSection(
     isExpanded: Boolean,
     onToggleExpanded: () -> Unit,
     onSelection: (LibrarySongItem, SongTransferState) -> Unit,
+    onPlaybackToggle: (LibrarySongItem) -> Unit,
     onShowDetails: (LibrarySongItem) -> Unit,
     accentColor: Color,
     textWhite: Color,
@@ -364,6 +368,7 @@ fun PlaylistSection(
                                 isPlayingResponse = isPlaying && isActive,
                                 transferState = transferState,
                                 onSelection = { onSelection(song, transferState) },
+                                onPlaybackToggle = { onPlaybackToggle(song) },
                                 onShowDetails = { onShowDetails(song) },
                                 cardBg = Color(0x09FFFFFF),
                                 activeBg = Color(0x24D0BCFF),

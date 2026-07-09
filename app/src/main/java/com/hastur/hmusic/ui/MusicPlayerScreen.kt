@@ -85,6 +85,7 @@ fun MusicPlayerScreen(
     val transferStates by viewModel.transferStates.collectAsState()
     val musicdlSearchState by viewModel.musicdlSearchState.collectAsState()
     val musicdlBaseUrl by viewModel.musicdlBaseUrl.collectAsState()
+    val localScanState by viewModel.localScanState.collectAsState()
 
     val currentSong by viewModel.currentSong.collectAsState()
     val isPlaying by viewModel.isPlaying.collectAsState()
@@ -250,7 +251,7 @@ fun MusicPlayerScreen(
                 }
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    // OSS Settings Toggle icon
+                    // App settings toggle
                     IconButton(
                         onClick = {
                             showSettings = !showSettings
@@ -263,8 +264,8 @@ fun MusicPlayerScreen(
                             .border(1.dp, Color(0x1AFFFFFF), CircleShape)
                     ) {
                         Icon(
-                            imageVector = if (showSettings) Icons.Filled.Close else Icons.Filled.Cloud,
-                            contentDescription = if (showSettings) "Close settings" else "OSS Settings",
+                            imageVector = if (showSettings) Icons.Filled.Close else Icons.Filled.Settings,
+                            contentDescription = if (showSettings) "关闭设置" else "设置",
                             tint = if (showSettings) accentNeonColor else textWhite
                         )
                     }
@@ -312,10 +313,11 @@ fun MusicPlayerScreen(
             }
 
             if (showSettings) {
-                BackupSettingsPage(
+                AppSettingsPage(
                     profiles = backupProfiles,
                     activeProfile = activeProfile,
                     statusMessageState = statusMessageState,
+                    localScanState = localScanState,
                     musicdlBaseUrl = musicdlBaseUrl,
                     onSave = { name, endpoint, region, forcePathStyle, bucket, ak, sk, prefix ->
                         viewModel.saveActiveProfile(name, endpoint, region, forcePathStyle, bucket, ak, sk, prefix)
@@ -324,10 +326,7 @@ fun MusicPlayerScreen(
                     onCreateProfile = { copyCurrent -> viewModel.createProfile(copyCurrent) },
                     onSwitchProfile = { profileId -> viewModel.switchProfile(profileId) },
                     onDeleteProfile = { viewModel.deleteActiveProfile() },
-                    onBackup = { viewModel.backupPlaylistToOSS() },
-                    onSyncPlaylist = { viewModel.syncFromOSS() },
                     onSync = { viewModel.syncFromOSS() },
-                    onClearPlaylist = { viewModel.clearPlaylist() },
                     onDismissStatusMessage = viewModel::resetStatusMessage,
                     onShowStatusCompleted = viewModel::showStatusCompleted,
                     onShowStatusError = viewModel::showStatusError,
@@ -336,6 +335,7 @@ fun MusicPlayerScreen(
                         pendingStorageAction = null
                         directoryPickerLauncher.launch(null)
                     },
+                    onScanLocalSongs = viewModel::scanAndRestoreLocalSongs,
                     accentColor = accentNeonColor,
                     textWhite = textWhite,
                     textDim = textDim,
@@ -435,6 +435,13 @@ fun MusicPlayerScreen(
                             }
                         } else {
                             runWithSongDirectory { viewModel.downloadSong(song) }
+                        }
+                    },
+                    onPlaybackToggle = { song ->
+                        if (currentSong?.md5sum == song.md5sum) {
+                            viewModel.playOrPause()
+                        } else {
+                            viewModel.playSong(song)
                         }
                     },
                     onShowDetails = { song -> detailsSong = song },

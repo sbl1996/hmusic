@@ -32,12 +32,6 @@ interface MusicDao {
     @Query("DELETE FROM musicdl_downloads WHERE md5sum = :md5sum")
     suspend fun deleteMusicdlDownloadsByMd5(md5sum: String)
 
-    @Query("DELETE FROM songs")
-    suspend fun clearLocalSongs()
-
-    @Query("DELETE FROM musicdl_downloads")
-    suspend fun clearMusicdlDownloads()
-
     @Query("DELETE FROM remote_songs")
     suspend fun clearRemoteSongs()
 
@@ -91,9 +85,6 @@ interface MusicDao {
 
     @Query("DELETE FROM musicdl_pending_downloads WHERE stableKey = :stableKey")
     suspend fun deleteMusicdlPendingDownload(stableKey: String)
-
-    @Query("DELETE FROM musicdl_pending_downloads")
-    suspend fun clearMusicdlPendingDownloads()
 
     @Transaction
     suspend fun activateBackupProfile(profileId: Long, updatedAt: Long = System.currentTimeMillis()) {

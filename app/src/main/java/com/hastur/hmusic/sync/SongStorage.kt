@@ -22,6 +22,17 @@ data class StoredSongFile(
     val updatedAt: Long
 )
 
+data class ScannedSongFile(
+    val md5sum: String,
+    val localPath: String,
+    val fileName: String,
+    val mimeType: String,
+    val updatedAt: Long,
+    val embeddedTitle: String?,
+    val embeddedArtist: String?,
+    val durationMs: Long
+)
+
 class SongStorage(private val context: Context) {
     private val partialDir = File(context.cacheDir, "song-downloads").apply { mkdirs() }
     private val preferences = context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
@@ -40,7 +51,7 @@ class SongStorage(private val context: Context) {
         preferences.edit().putString(KEY_DIRECTORY_URI, uri.toString()).apply()
     }
 
-    fun importFromUri(uriString: String): StoredSongFile {
+    fun importFromUri(uriString: String, title: String, artist: String): StoredSongFile {
         val uri = Uri.parse(uriString)
         val contentResolver = context.contentResolver
         val originalName = queryDisplayName(contentResolver, uri) ?: uri.lastPathSegment ?: "track"
@@ -52,19 +63,27 @@ class SongStorage(private val context: Context) {
             tempFile.outputStream().use(input::copyTo)
         } ?: error("无法读取所选音频文件")
 
-        return finalizeTempFile(tempFile, normalizedName, mimeType)
+        return finalizeTempFile(tempFile, normalizedName, mimeType, title, artist)
     }
 
     fun storeRemoteStream(
         remoteKey: String,
         inputStream: InputStream,
+        title: String,
+        artist: String,
         totalBytes: Long? = null,
         onProgress: (bytesRead: Long, totalBytes: Long?) -> Unit = { _, _ -> }
     ): StoredSongFile {
         val normalizedName = normalizeFileName(remoteKey.substringAfterLast("/").ifBlank { "track" })
         val tempFile = File(partialDir, "download-${System.currentTimeMillis()}-$normalizedName")
         writeStream(tempFile, inputStream, false, 0L, totalBytes, onProgress)
-        return finalizeTempFile(tempFile, normalizedName, mimeTypeFromName(normalizedName))
+        return finalizeTempFile(
+            tempFile = tempFile,
+            originalName = normalizedName,
+            mimeType = mimeTypeFromName(normalizedName),
+            title = title,
+            artist = artist
+        )
     }
 
     fun partialRemoteBytes(remoteKey: String): Long {
@@ -74,6 +93,8 @@ class SongStorage(private val context: Context) {
     fun storeRemoteStreamResumable(
         remoteKey: String,
         inputStream: InputStream,
+        title: String,
+        artist: String,
         totalBytes: Long? = null,
         expectedBytes: Long? = null,
         append: Boolean = false,
@@ -92,7 +113,13 @@ class SongStorage(private val context: Context) {
         if (expectedBytes != null && bytesRead != expectedBytes) {
             error("文件下载不完整：已接收 $bytesRead 字节，应为 $expectedBytes 字节")
         }
-        return finalizeTempFile(partialFile, normalizedName, mimeTypeFromName(normalizedName))
+        return finalizeTempFile(
+            tempFile = partialFile,
+            originalName = normalizedName,
+            mimeType = mimeTypeFromName(normalizedName),
+            title = title,
+            artist = artist
+        )
     }
 
     fun exists(localPath: String?): Boolean {
@@ -182,11 +209,71 @@ class SongStorage(private val context: Context) {
         }.getOrDefault(0L)
     }
 
-    private fun finalizeTempFile(tempFile: File, originalName: String, mimeType: String): StoredSongFile {
+    fun scanConfiguredDirectory(
+        knownLocalPaths: Set<String>,
+        onProgress: (scanned: Int, total: Int) -> Unit = { _, _ -> }
+    ): List<ScannedSongFile> {
+        val parentUri = configuredDirectoryUri() ?: error("请先选择 Download/hmusic 存储目录")
+        val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(
+            parentUri,
+            DocumentsContract.getTreeDocumentId(parentUri)
+        )
+        val projection = arrayOf(
+            DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+            DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+            DocumentsContract.Document.COLUMN_MIME_TYPE,
+            DocumentsContract.Document.COLUMN_LAST_MODIFIED
+        )
+        val files = mutableListOf<ScannedSongFile>()
+        context.contentResolver.query(childrenUri, projection, null, null, null)?.use { cursor ->
+            val total = cursor.count
+            var scanned = 0
+            while (cursor.moveToNext()) {
+                scanned += 1
+                val documentId = cursor.getString(0)
+                val displayName = cursor.getString(1).orEmpty()
+                val reportedMimeType = cursor.getString(2).orEmpty()
+                if (!isAudioFile(displayName, reportedMimeType)) {
+                    onProgress(scanned, total)
+                    continue
+                }
+
+                val documentUri = DocumentsContract.buildDocumentUriUsingTree(parentUri, documentId)
+                val localPath = documentUri.toString()
+                if (localPath in knownLocalPaths) {
+                    onProgress(scanned, total)
+                    continue
+                }
+                val metadata = readAudioMetadata(localPath)
+                files += ScannedSongFile(
+                    md5sum = context.contentResolver.openInputStream(documentUri)?.use(::streamMd5)
+                        ?: error("无法读取本地文件：$displayName"),
+                    localPath = localPath,
+                    fileName = displayName,
+                    mimeType = reportedMimeType.ifBlank { mimeTypeFromName(displayName) },
+                    updatedAt = if (cursor.isNull(3)) 0L else cursor.getLong(3),
+                    embeddedTitle = metadata.title,
+                    embeddedArtist = metadata.artist,
+                    durationMs = metadata.durationMs
+                )
+                onProgress(scanned, total)
+            }
+        }
+        return files
+    }
+
+    private fun finalizeTempFile(
+        tempFile: File,
+        originalName: String,
+        mimeType: String,
+        title: String,
+        artist: String
+    ): StoredSongFile {
         try {
             val md5 = fileMd5(tempFile)
-            val storageName = buildStorageName(md5, originalName)
-            val targetUri = findDocument(storageName)
+            val preferredName = buildStorageName(artist, title, originalName)
+            val (storageName, existingUri) = resolveStorageTarget(preferredName, md5)
+            val targetUri = existingUri
                 ?: DocumentsContract.createDocument(
                     context.contentResolver,
                     configuredDirectoryDocumentUri(),
@@ -202,12 +289,24 @@ class SongStorage(private val context: Context) {
             return StoredSongFile(
                 md5sum = md5,
                 localPath = targetUri.toString(),
-                fileName = originalName,
+                fileName = storageName,
                 mimeType = mimeType,
                 updatedAt = System.currentTimeMillis()
             )
         } finally {
             tempFile.delete()
+        }
+    }
+
+    private fun resolveStorageTarget(preferredName: String, md5: String): Pair<String, Uri?> {
+        var sequence = 1
+        while (true) {
+            val candidateName = if (sequence == 1) preferredName else appendSequence(preferredName, sequence)
+            val existing = findDocument(candidateName)
+            if (existing == null) return candidateName to null
+            val existingMd5 = context.contentResolver.openInputStream(existing)?.use(::streamMd5)
+            if (existingMd5 == md5) return candidateName to existing
+            sequence += 1
         }
     }
 
@@ -288,12 +387,60 @@ class SongStorage(private val context: Context) {
     }
 
     private fun normalizeFileName(name: String): String {
-        return name.trim().ifBlank { "track" }.replace(Regex("[^A-Za-z0-9._-]"), "_")
+        return name
+            .replace(Regex("[\\\\/:*?\"<>|\\p{Cntrl}]"), "_")
+            .trim()
+            .trimEnd('.', ' ')
+            .ifBlank { "未知" }
+            .take(MAX_FILE_NAME_COMPONENT_LENGTH)
     }
 
-    private fun buildStorageName(md5: String, originalName: String): String {
+    private fun buildStorageName(artist: String, title: String, originalName: String): String {
         val extension = originalName.substringAfterLast('.', "").lowercase(Locale.ROOT)
-        return if (extension.isBlank()) md5 else "$md5.$extension"
+        val readableName = "${normalizeFileName(artist.ifBlank { "佚名" })} - ${
+            normalizeFileName(title.ifBlank { "未知歌曲" })
+        }"
+        return if (extension.isBlank()) readableName else "$readableName.$extension"
+    }
+
+    private fun appendSequence(fileName: String, sequence: Int): String {
+        val extension = fileName.substringAfterLast('.', "").takeIf { fileName.contains('.') }.orEmpty()
+        val baseName = if (extension.isBlank()) fileName else fileName.removeSuffix(".$extension")
+        return if (extension.isBlank()) "$baseName ($sequence)" else "$baseName ($sequence).$extension"
+    }
+
+    private fun isAudioFile(fileName: String, mimeType: String): Boolean {
+        return mimeType.startsWith("audio/") ||
+            fileName.substringAfterLast('.', "").lowercase(Locale.ROOT) in AUDIO_EXTENSIONS
+    }
+
+    private data class AudioMetadata(
+        val title: String?,
+        val artist: String?,
+        val durationMs: Long
+    )
+
+    private fun readAudioMetadata(localPath: String): AudioMetadata {
+        return runCatching {
+            val retriever = MediaMetadataRetriever()
+            try {
+                retriever.setDataSource(context, Uri.parse(localPath))
+                AudioMetadata(
+                    title = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE)
+                        ?.trim()
+                        ?.takeIf(String::isNotBlank),
+                    artist = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST)
+                        ?.trim()
+                        ?.takeIf(String::isNotBlank),
+                    durationMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                        ?.toLongOrNull()
+                        ?.coerceAtLeast(0L)
+                        ?: 0L
+                )
+            } finally {
+                retriever.release()
+            }
+        }.getOrElse { AudioMetadata(null, null, 0L) }
     }
 
     private fun mimeTypeFromName(name: String): String {
@@ -311,16 +458,20 @@ class SongStorage(private val context: Context) {
     companion object {
         private const val PREFERENCES_NAME = "song_storage"
         private const val KEY_DIRECTORY_URI = "directory_uri"
+        private const val MAX_FILE_NAME_COMPONENT_LENGTH = 96
+        private val AUDIO_EXTENSIONS = setOf("mp3", "m4a", "aac", "flac", "wav", "ogg")
 
         fun fileMd5(file: File): String {
+            return FileInputStream(file).use(::streamMd5)
+        }
+
+        private fun streamMd5(input: InputStream): String {
             val digest = MessageDigest.getInstance("MD5")
-            FileInputStream(file).use { input ->
-                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                while (true) {
-                    val read = input.read(buffer)
-                    if (read <= 0) break
-                    digest.update(buffer, 0, read)
-                }
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            while (true) {
+                val read = input.read(buffer)
+                if (read <= 0) break
+                digest.update(buffer, 0, read)
             }
             return digest.digest().joinToString("") { "%02x".format(it) }
         }

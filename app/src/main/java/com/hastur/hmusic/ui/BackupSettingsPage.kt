@@ -26,6 +26,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ManageSearch
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
@@ -72,25 +73,24 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 @Composable
-fun BackupSettingsPage(
+fun AppSettingsPage(
     profiles: List<BackupProfileEntity>,
     activeProfile: BackupProfileEntity?,
     statusMessageState: StatusMessageState,
+    localScanState: LocalScanState,
     musicdlBaseUrl: String,
     onSave: (String, String, String, Boolean, String, String, String, String) -> Unit,
     onMusicdlBaseUrlChange: (String) -> Unit,
     onCreateProfile: (Boolean) -> Unit,
     onSwitchProfile: (Long) -> Unit,
     onDeleteProfile: () -> Unit,
-    onBackup: () -> Unit,
-    onSyncPlaylist: () -> Unit,
     onSync: () -> Unit,
-    onClearPlaylist: () -> Unit,
     onDismissStatusMessage: () -> Unit,
     onShowStatusCompleted: (String) -> Unit,
     onShowStatusError: (String) -> Unit,
     hasSongDirectory: Boolean,
     onChooseSongDirectory: () -> Unit,
+    onScanLocalSongs: () -> Unit,
     accentColor: Color,
     textWhite: Color,
     textDim: Color,
@@ -108,6 +108,21 @@ fun BackupSettingsPage(
                 .verticalScroll(scrollState),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            Text(
+                text = "设置",
+                color = textWhite,
+                fontSize = 24.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(top = 4.dp, bottom = 4.dp)
+            )
+
+            SettingsSectionHeader(
+                icon = Icons.Filled.Storage,
+                title = "本地存储",
+                accentColor = accentColor,
+                textWhite = textWhite
+            )
+
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -151,6 +166,72 @@ fun BackupSettingsPage(
                 }
             }
 
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(
+                        enabled = hasSongDirectory && !localScanState.isScanning,
+                        onClick = onScanLocalSongs
+                    )
+                    .testTag("scan_local_songs_button"),
+                shape = RoundedCornerShape(16.dp),
+                color = Color(0x0AFFFFFF),
+                border = BorderStroke(1.dp, Color(0x14FFFFFF))
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 13.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (localScanState.isScanning) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            color = accentColor,
+                            strokeWidth = 2.dp
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ManageSearch,
+                            contentDescription = null,
+                            tint = if (hasSongDirectory) accentColor else textDim,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = if (localScanState.isScanning) "正在扫描本地歌曲" else "扫描本地歌曲",
+                            color = if (hasSongDirectory) textWhite else textDim,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = when {
+                                localScanState.isScanning && localScanState.total > 0 ->
+                                    "${localScanState.scanned} / ${localScanState.total}"
+                                hasSongDirectory -> "恢复目录中未加入播放列表的音频"
+                                else -> "请先选择歌曲存储目录"
+                            },
+                            color = textDim,
+                            fontSize = 12.sp
+                        )
+                    }
+                    if (!localScanState.isScanning) {
+                        Icon(
+                            imageVector = Icons.Filled.ChevronRight,
+                            contentDescription = null,
+                            tint = textDim
+                        )
+                    }
+                }
+            }
+
+            SettingsSectionHeader(
+                icon = Icons.Filled.Cloud,
+                title = "云端备份",
+                accentColor = accentColor,
+                textWhite = textWhite
+            )
+
             OssSettingsCard(
                 profiles = profiles,
                 activeProfile = activeProfile,
@@ -158,16 +239,19 @@ fun BackupSettingsPage(
                 onCreateProfile = onCreateProfile,
                 onSwitchProfile = onSwitchProfile,
                 onDeleteProfile = onDeleteProfile,
-                onBackup = onBackup,
-                onSyncPlaylist = onSyncPlaylist,
                 onSync = onSync,
-                onClearPlaylist = onClearPlaylist,
                 onShowStatusCompleted = onShowStatusCompleted,
                 onShowStatusError = onShowStatusError,
-                cardBackground = Color(0x13FFFFFF),
                 accentColor = accentColor,
                 textWhite = textWhite,
                 textDim = textDim
+            )
+
+            SettingsSectionHeader(
+                icon = Icons.Filled.Search,
+                title = "在线搜索",
+                accentColor = accentColor,
+                textWhite = textWhite
             )
 
             MusicdlSettingsCard(
@@ -199,6 +283,34 @@ fun BackupSettingsPage(
                 )
             }
         }
+    }
+
+}
+
+@Composable
+private fun SettingsSectionHeader(
+    icon: ImageVector,
+    title: String,
+    accentColor: Color,
+    textWhite: Color
+) {
+    Row(
+        modifier = Modifier.padding(top = 4.dp, start = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = accentColor,
+            modifier = Modifier.size(18.dp)
+        )
+        Text(
+            text = title,
+            color = textWhite,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Bold
+        )
     }
 }
 
@@ -233,7 +345,7 @@ private fun MusicdlSettingsCard(
                     modifier = Modifier.size(18.dp)
                 )
                 Text(
-                    text = "在线搜索 API",
+                    text = "在线搜索服务",
                     color = textWhite,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Bold
@@ -243,7 +355,7 @@ private fun MusicdlSettingsCard(
             OutlinedTextField(
                 value = baseUrl,
                 onValueChange = onBaseUrlChange,
-                label = { Text("musicdl API") },
+                label = { Text("服务地址") },
                 placeholder = { Text("http://10.0.2.2:8000") },
                 singleLine = true,
                 colors = OutlinedTextFieldDefaults.colors(
