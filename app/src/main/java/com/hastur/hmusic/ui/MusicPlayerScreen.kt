@@ -443,13 +443,6 @@ fun MusicPlayerScreen(
                             }
                         }
                     },
-                    onPlaybackToggle = { song ->
-                        if (currentSong?.md5sum == song.md5sum) {
-                            viewModel.playOrPause()
-                        } else {
-                            viewModel.playSong(song)
-                        }
-                    },
                     onShowDetails = { song -> detailsSong = song },
                     accentColor = accentNeonColor,
                     textWhite = textWhite,

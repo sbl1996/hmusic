@@ -82,7 +82,6 @@ fun SongItemRow(
     transferState: SongTransferState,
     onSelection: () -> Unit,
     onTransfer: () -> Unit,
-    onPlaybackToggle: () -> Unit,
     onShowDetails: () -> Unit,
     cardBg: Color,
     activeBg: Color,
@@ -94,14 +93,7 @@ fun SongItemRow(
     val actionIcon = when {
         isPlayingResponse -> Icons.Filled.Equalizer
         song.isDownloaded -> Icons.Filled.Audiotrack
-        song.canBackup -> Icons.Filled.CloudUpload
-        song.canDownload -> Icons.Filled.CloudDownload
-        else -> Icons.Filled.Warning
-    }
-    val availabilityLabel = when (song.status) {
-        LibrarySongStatus.LOCAL_ONLY -> "仅本地"
-        LibrarySongStatus.REMOTE_ONLY -> "未下载"
-        LibrarySongStatus.BACKED_UP -> "已备份"
+        else -> Icons.Filled.MusicNote
     }
 
     Surface(
@@ -156,35 +148,17 @@ fun SongItemRow(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Text(
-                        text = song.artist,
-                        color = textDim,
-                        fontSize = 12.sp,
-                        lineHeight = 16.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        style = LocalTextStyle.current.copy(
-                            platformStyle = PlatformTextStyle(includeFontPadding = true)
-                        )
+                Text(
+                    text = song.artist,
+                    color = textDim,
+                    fontSize = 12.sp,
+                    lineHeight = 16.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = LocalTextStyle.current.copy(
+                        platformStyle = PlatformTextStyle(includeFontPadding = true)
                     )
-                    Text(
-                        text = availabilityLabel,
-                        color = if (song.isDownloaded) Color(0xFFEADDFF).copy(alpha = 0.8f) else accentColor.copy(alpha = 0.8f),
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace,
-                        modifier = Modifier
-                            .background(
-                                color = (if (song.isDownloaded) Color(0xFFEADDFF) else accentColor).copy(alpha = 0.08f),
-                                shape = RoundedCornerShape(4.dp)
-                            )
-                            .padding(horizontal = 4.dp, vertical = 2.dp)
-                    )
-                }
+                )
             }
 
             Spacer(modifier = Modifier.width(8.dp))
@@ -203,19 +177,14 @@ fun SongItemRow(
                         .testTag("song_transfer_${song.title}")
                 )
             } else {
-                IconButton(
-                    onClick = onPlaybackToggle,
+                Icon(
+                    imageVector = Icons.Filled.Cloud,
+                    contentDescription = "已在云端",
+                    tint = textDim,
                     modifier = Modifier
-                        .size(32.dp)
-                        .testTag("song_play_pause_${song.title}")
-                ) {
-                    Icon(
-                        imageVector = if (isPlayingResponse) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                        contentDescription = if (isPlayingResponse) "暂停" else "播放",
-                        tint = if (isActive) accentColor else textDim,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
+                        .size(20.dp)
+                        .testTag("song_in_cloud_${song.title}")
+                )
             }
         }
     }
@@ -285,7 +254,6 @@ fun PlaylistSection(
     onToggleExpanded: () -> Unit,
     onSelection: (LibrarySongItem, SongTransferState) -> Unit,
     onTransfer: (LibrarySongItem, SongTransferState) -> Unit,
-    onPlaybackToggle: (LibrarySongItem) -> Unit,
     onShowDetails: (LibrarySongItem) -> Unit,
     accentColor: Color,
     textWhite: Color,
@@ -374,7 +342,6 @@ fun PlaylistSection(
                                 transferState = transferState,
                                 onSelection = { onSelection(song, transferState) },
                                 onTransfer = { onTransfer(song, transferState) },
-                                onPlaybackToggle = { onPlaybackToggle(song) },
                                 onShowDetails = { onShowDetails(song) },
                                 cardBg = Color(0x09FFFFFF),
                                 activeBg = Color(0x24D0BCFF),
