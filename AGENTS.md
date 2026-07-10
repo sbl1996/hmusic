@@ -31,6 +31,6 @@ Add JVM tests in `app/src/test` for repository, sync, and database behavior. Add
 Robolectric and Roborazzi are available, so prefer fast local tests for UI logic and screenshot-sensitive changes when editing Compose screens.
 
 ## Commit & Pull Request Guidelines
-Use short, imperative commit subjects, preferably following Conventional Commits.
+Use concise, imperative commit subjects, preferably following Conventional Commits.
 
 Pull requests should include a concise summary, test notes, linked issue or task if applicable, and screenshots for visible UI changes. Call out signing-related changes explicitly.
