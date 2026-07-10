@@ -81,6 +81,7 @@ fun SongItemRow(
     isPlayingResponse: Boolean,
     transferState: SongTransferState,
     onSelection: () -> Unit,
+    onTransfer: () -> Unit,
     onPlaybackToggle: () -> Unit,
     onShowDetails: () -> Unit,
     cardBg: Color,
@@ -196,7 +197,10 @@ fun SongItemRow(
                     },
                     accentColor = accentColor,
                     errorColor = Color(0xFFFF6B6B),
-                    modifier = Modifier.size(24.dp)
+                    modifier = Modifier
+                        .size(32.dp)
+                        .clickable(enabled = !isRunning, onClick = onTransfer)
+                        .testTag("song_transfer_${song.title}")
                 )
             } else {
                 IconButton(
@@ -280,6 +284,7 @@ fun PlaylistSection(
     isExpanded: Boolean,
     onToggleExpanded: () -> Unit,
     onSelection: (LibrarySongItem, SongTransferState) -> Unit,
+    onTransfer: (LibrarySongItem, SongTransferState) -> Unit,
     onPlaybackToggle: (LibrarySongItem) -> Unit,
     onShowDetails: (LibrarySongItem) -> Unit,
     accentColor: Color,
@@ -368,6 +373,7 @@ fun PlaylistSection(
                                 isPlayingResponse = isPlaying && isActive,
                                 transferState = transferState,
                                 onSelection = { onSelection(song, transferState) },
+                                onTransfer = { onTransfer(song, transferState) },
                                 onPlaybackToggle = { onPlaybackToggle(song) },
                                 onShowDetails = { onShowDetails(song) },
                                 cardBg = Color(0x09FFFFFF),

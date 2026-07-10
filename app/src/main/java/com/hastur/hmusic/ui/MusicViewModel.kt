@@ -882,16 +882,55 @@ class MusicViewModel(
         }
     }
 
-    fun deleteSong(song: LibrarySongItem, deleteLocalFile: Boolean = false) {
+    fun deleteSong(
+        song: LibrarySongItem,
+        deleteLocalFile: Boolean = false,
+        removeFromCloudPlaylist: Boolean = false
+    ) {
         val localSong = song.localSong ?: return
         viewModelScope.launch(Dispatchers.IO) {
-            if (deleteLocalFile) {
-                if (songStorage.exists(localSong.localPath) && !songStorage.delete(localSong.localPath)) {
-                    _statusMessageState.value = StatusMessageState.Error("删除本地文件失败：${localSong.fileName}")
+            try {
+                if (removeFromCloudPlaylist) {
+                    val profile = activeProfile.value
+                    val client = ossClient
+                    if (profile == null || client == null || song.remoteSong == null) {
+                        _statusMessageState.value =
+                            StatusMessageState.Error("当前歌曲没有可移除的云端歌单记录，本地内容未更改")
+                        return@launch
+                    }
+                    cloudSyncService.removeSongFromCloudPlaylist(
+                        profile = profile,
+                        client = client,
+                        md5sum = song.md5sum
+                    )
+                }
+
+                if (deleteLocalFile &&
+                    songStorage.exists(localSong.localPath) &&
+                    !songStorage.delete(localSong.localPath)
+                ) {
+                    _statusMessageState.value =
+                        StatusMessageState.Error("删除本地文件失败：${localSong.fileName}")
                     return@launch
                 }
+
+                repository.deleteLocalSong(localSong)
+                _statusMessageState.value = StatusMessageState.Completed(
+                    if (removeFromCloudPlaylist) {
+                        "已删除本地记录并从云端歌单移除：${song.title}"
+                    } else {
+                        "已删除本地记录：${song.title}"
+                    }
+                )
+            } catch (e: Exception) {
+                _statusMessageState.value = if (removeFromCloudPlaylist) {
+                    StatusMessageState.Error(
+                        "从云端歌单移除失败，本地内容未更改：${e.localizedMessage}"
+                    )
+                } else {
+                    StatusMessageState.Error("删除歌曲失败：${e.localizedMessage}")
+                }
             }
-            repository.deleteLocalSong(localSong)
         }
     }
 

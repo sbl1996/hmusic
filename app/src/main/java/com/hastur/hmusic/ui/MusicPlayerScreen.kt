@@ -428,13 +428,19 @@ fun MusicPlayerScreen(
                         if (transferState is SongTransferState.Running) {
                             Unit
                         } else if (song.isDownloaded) {
-                            if (song.canBackup) {
-                                viewModel.uploadSong(song)
-                            } else {
-                                viewModel.playSong(song)
-                            }
+                            viewModel.playSong(song)
                         } else {
-                            runWithSongDirectory { viewModel.downloadSong(song) }
+                            Unit
+                        }
+                    },
+                    onTransfer = { song, transferState ->
+                        if (transferState !is SongTransferState.Running) {
+                            when {
+                                song.canBackup -> viewModel.uploadSong(song)
+                                song.canDownload -> runWithSongDirectory {
+                                    viewModel.downloadSong(song)
+                                }
+                            }
                         }
                     },
                     onPlaybackToggle = { song ->
@@ -458,8 +464,12 @@ fun MusicPlayerScreen(
     detailsSong?.let { song ->
         LocalSongDetailsDialog(
             song = song,
-            onDelete = { deleteLocalFile ->
-                viewModel.deleteSong(song, deleteLocalFile)
+            onDelete = { deleteLocalFile, removeFromCloudPlaylist ->
+                viewModel.deleteSong(
+                    song = song,
+                    deleteLocalFile = deleteLocalFile,
+                    removeFromCloudPlaylist = removeFromCloudPlaylist
+                )
                 detailsSong = null
             },
             onDismiss = { detailsSong = null },
@@ -580,7 +590,7 @@ fun MusicPlayerScreen(
 @Composable
 private fun LocalSongDetailsDialog(
     song: LibrarySongItem,
-    onDelete: (Boolean) -> Unit,
+    onDelete: (deleteLocalFile: Boolean, removeFromCloudPlaylist: Boolean) -> Unit,
     onDismiss: () -> Unit,
     textWhite: Color,
     textDim: Color
@@ -590,6 +600,7 @@ private fun LocalSongDetailsDialog(
     val localPath = song.localSong?.localPath
     val fileExists = remember(localPath) { songStorage.exists(localPath) }
     var deleteLocalFile by rememberSaveable(song.md5sum) { mutableStateOf(false) }
+    var removeFromCloudPlaylist by rememberSaveable(song.md5sum) { mutableStateOf(false) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -621,11 +632,35 @@ private fun LocalSongDetailsDialog(
                     )
                     Text("同时删除本地文件", color = textWhite)
                 }
+
+                if (song.remoteSong != null) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                removeFromCloudPlaylist = !removeFromCloudPlaylist
+                            },
+                        verticalAlignment = Alignment.Top
+                    ) {
+                        Checkbox(
+                            checked = removeFromCloudPlaylist,
+                            onCheckedChange = { removeFromCloudPlaylist = it }
+                        )
+                        Column(modifier = Modifier.padding(top = 12.dp)) {
+                            Text("从云端歌单中移除", color = textWhite)
+                            Text(
+                                text = "只移除歌单记录，S3 中的音频文件会保留",
+                                color = textDim,
+                                fontSize = 12.sp
+                            )
+                        }
+                    }
+                }
             }
         },
         confirmButton = {
             TextButton(
-                onClick = { onDelete(deleteLocalFile) },
+                onClick = { onDelete(deleteLocalFile, removeFromCloudPlaylist) },
                 colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
             ) {
                 Text("删除")

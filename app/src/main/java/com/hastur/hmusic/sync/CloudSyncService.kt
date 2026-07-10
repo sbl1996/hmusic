@@ -106,6 +106,22 @@ class CloudSyncService(
         return SyncFromCloudResult(remoteSongCount = remoteEntities.size)
     }
 
+    suspend fun removeSongFromCloudPlaylist(
+        profile: BackupProfileEntity,
+        client: OssClient,
+        md5sum: String
+    ) {
+        val now = System.currentTimeMillis()
+        val latestManifest = manifestStore.load(client)
+        val remainingSongs = remoteSongSyncAssembler
+            .fromManifest(profile.id, latestManifest)
+            .filterNot { it.md5sum == md5sum }
+
+        manifestStore.save(client, remainingSongs, now)
+        repository.replaceRemoteSongs(profile.id, remainingSongs)
+        touchProfileLastSync(profile, now)
+    }
+
     private suspend fun touchProfileLastSync(
         profile: BackupProfileEntity,
         syncedAt: Long = System.currentTimeMillis()
