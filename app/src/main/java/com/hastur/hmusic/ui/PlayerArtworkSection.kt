@@ -77,7 +77,6 @@ fun PlayerArtworkSection(
     currentSongTitle: String,
     currentSongArtist: String,
     currentSongLocalPath: String?,
-    isPlaying: Boolean,
     spinningAngle: Float,
     breathingScale: Float,
     isPlaylistExpanded: Boolean,
@@ -150,7 +149,7 @@ fun PlayerArtworkSection(
                     Box(
                         modifier = Modifier
                             .size(vinylSize * breathingScale)
-                            .rotate(if (isPlaying) spinningAngle else 0f),
+                            .rotate(spinningAngle),
                         contentAlignment = Alignment.Center
                     ) {
                         Canvas(modifier = Modifier.fillMaxSize()) {
@@ -200,4 +199,3 @@ fun PlayerArtworkSection(
         }
     }
 }
-

@@ -184,19 +184,21 @@ fun MusicPlayerScreen(
     val textWhite = Color(0xFFE2E2E6) // Soft high contrast white
     val textDim = Color(0xFF909094) // Muted gray description text
 
-    // Infinite rotations/pulses for spinning vinyl
-    val infiniteTransition = rememberInfiniteTransition(label = "VinylSpin")
-    val spinningAngle by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 360f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(15000, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "spin"
-    )
+    // Keep the current angle while paused; reset only when the playing song changes.
+    val spinningAngle = remember(currentSong?.md5sum) { Animatable(0f) }
+    LaunchedEffect(isPlaying, spinningAngle) {
+        if (isPlaying) {
+            while (true) {
+                spinningAngle.animateTo(
+                    targetValue = spinningAngle.value + 360f,
+                    animationSpec = tween(15000, easing = LinearEasing)
+                )
+            }
+        }
+    }
 
-    val breathingScale by infiniteTransition.animateFloat(
+    val pulseTransition = rememberInfiniteTransition(label = "VinylPulse")
+    val breathingScale by pulseTransition.animateFloat(
         initialValue = 1.0f,
         targetValue = if (isPlaying) 1.06f else 1.0f,
         animationSpec = infiniteRepeatable(
@@ -319,8 +321,7 @@ fun MusicPlayerScreen(
                         currentSongTitle = currentSong?.title ?: "无正在播放的歌曲",
                         currentSongArtist = currentSong?.artist ?: "请从下方列表挑选音轨",
                         currentSongLocalPath = currentSong?.localPath,
-                        isPlaying = isPlaying,
-                        spinningAngle = spinningAngle,
+                        spinningAngle = spinningAngle.value,
                         breathingScale = breathingScale,
                         isPlaylistExpanded = isPlaylistExpanded,
                         accentColor = accentNeonColor,
