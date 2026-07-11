@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -44,6 +45,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -72,12 +74,26 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
+private enum class PrimaryDestination(
+    val label: String,
+    val eyebrow: String,
+    val selectedIcon: ImageVector,
+    val unselectedIcon: ImageVector
+) {
+    Player("播放", "LOCAL PLAYBACK", Icons.Filled.LibraryMusic, Icons.Outlined.LibraryMusic),
+    Search("搜索", "DISCOVER MUSIC", Icons.Filled.Search, Icons.Outlined.Search),
+    Settings("设置", "APP SETTINGS", Icons.Filled.Settings, Icons.Outlined.Settings)
+}
+
 @Composable
 fun MusicPlayerScreen(
     viewModel: MusicViewModel,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val uiPreferencesStore = remember(context) { UiPreferencesStore(context) }
+    val useIconBottomNavigation by uiPreferencesStore.useIconBottomNavigation.collectAsState(initial = false)
+    val coroutineScope = rememberCoroutineScope()
     val songs by viewModel.allSongs.collectAsState()
     val backupProfiles by viewModel.backupProfiles.collectAsState()
     val activeProfile by viewModel.activeProfile.collectAsState()
@@ -96,8 +112,7 @@ fun MusicPlayerScreen(
     val playerError by viewModel.playerError.collectAsState()
     val bannerAutoDismissMillis = 3000L
 
-    var showSettings by remember { mutableStateOf(false) }
-    var showSearch by rememberSaveable { mutableStateOf(false) }
+    var primaryDestination by rememberSaveable { mutableStateOf(PrimaryDestination.Player) }
     var showAddDialog by remember { mutableStateOf(false) }
     var pickedUri by remember { mutableStateOf("") }
     var inputTitle by remember { mutableStateOf("") }
@@ -212,9 +227,10 @@ fun MusicPlayerScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .padding(bottom = 56.dp)
                 .padding(horizontal = 16.dp)
         ) {
-            // 1. Top Bar Navigation
+            // Brand header. Primary navigation stays in the stable bottom bar.
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -241,7 +257,7 @@ fun MusicPlayerScreen(
                                 .background(accentNeonColor)
                         )
                         Text(
-                            text = "LOCAL PLAYBACK",
+                            text = primaryDestination.eyebrow,
                             fontSize = 10.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = accentNeonColor,
@@ -251,49 +267,15 @@ fun MusicPlayerScreen(
                     }
                 }
 
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    // App settings toggle
-                    IconButton(
-                        onClick = {
-                            showSettings = !showSettings
-                            if (showSettings) showSearch = false
-                        },
-                        modifier = Modifier
-                            .testTag("settings_button")
-                            .clip(CircleShape)
-                            .background(Color(0x13FFFFFF))
-                            .border(1.dp, Color(0x1AFFFFFF), CircleShape)
-                    ) {
-                        Icon(
-                            imageVector = if (showSettings) Icons.Filled.Close else Icons.Filled.Settings,
-                            contentDescription = if (showSettings) "关闭设置" else "设置",
-                            tint = if (showSettings) accentNeonColor else textWhite
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.width(8.dp))
-
-                    IconButton(
-                        onClick = {
-                            showSearch = !showSearch
-                            if (showSearch) showSettings = false
-                        },
-                        modifier = Modifier
-                            .testTag("search_button")
-                            .clip(CircleShape)
-                            .background(Color(0x13FFFFFF))
-                            .border(1.dp, Color(0x1AFFFFFF), CircleShape)
-                    ) {
-                        Icon(
-                            imageVector = if (showSearch) Icons.Filled.Close else Icons.Filled.Search,
-                            contentDescription = if (showSearch) "Close search" else "Search musicdl",
-                            tint = if (showSearch) accentNeonColor else textWhite
-                        )
-                    }
-                }
+                Text(
+                    text = primaryDestination.label,
+                    color = textDim,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium
+                )
             }
 
-            if (showSettings) {
+            if (primaryDestination == PrimaryDestination.Settings) {
                 AppSettingsPage(
                     profiles = backupProfiles,
                     activeProfile = activeProfile,
@@ -323,12 +305,16 @@ fun MusicPlayerScreen(
                     musicdlStorageState = musicdlStorageState,
                     onLoadDownloadStorage = viewModel::loadDownloadStorage,
                     onCleanupDownloadStorage = viewModel::cleanupDownloadStorage,
+                    useIconBottomNavigation = useIconBottomNavigation,
+                    onUseIconBottomNavigationChange = { enabled ->
+                        coroutineScope.launch { uiPreferencesStore.setUseIconBottomNavigation(enabled) }
+                    },
                     accentColor = accentNeonColor,
                     textWhite = textWhite,
                     textDim = textDim,
                     modifier = Modifier.weight(1f)
                 )
-            } else if (showSearch) {
+            } else if (primaryDestination == PrimaryDestination.Search) {
                 SearchSection(
                     searchState = musicdlSearchState,
                     transferStates = transferStates,
@@ -404,39 +390,83 @@ fun MusicPlayerScreen(
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                PlaylistSection(
-                    songs = songs,
-                    currentSongMd5 = currentSong?.md5sum,
-                    isPlaying = isPlaying,
-                    transferStates = transferStates,
-                    isExpanded = isPlaylistExpanded,
-                    onToggleExpanded = { isPlaylistExpanded = !isPlaylistExpanded },
-                    onSelection = { song, transferState ->
-                        if (transferState is SongTransferState.Running) {
-                            Unit
-                        } else if (song.isDownloaded) {
-                            viewModel.playSong(song)
-                        } else {
-                            Unit
-                        }
-                    },
-                    onTransfer = { song, transferState ->
-                        if (transferState !is SongTransferState.Running) {
-                            when {
-                                song.canBackup -> viewModel.uploadSong(song)
-                                song.canDownload -> runWithSongDirectory {
-                                    viewModel.downloadSong(song)
+                if (isPlaylistExpanded) {
+                    PlaylistSection(
+                        songs = songs,
+                        currentSongMd5 = currentSong?.md5sum,
+                        isPlaying = isPlaying,
+                        transferStates = transferStates,
+                        isExpanded = true,
+                        onToggleExpanded = { isPlaylistExpanded = false },
+                        onSelection = { song, transferState ->
+                            if (transferState is SongTransferState.Running) {
+                                Unit
+                            } else if (song.isDownloaded) {
+                                viewModel.playSong(song)
+                            } else {
+                                Unit
+                            }
+                        },
+                        onTransfer = { song, transferState ->
+                            if (transferState !is SongTransferState.Running) {
+                                when {
+                                    song.canBackup -> viewModel.uploadSong(song)
+                                    song.canDownload -> runWithSongDirectory {
+                                        viewModel.downloadSong(song)
+                                    }
                                 }
                             }
-                        }
-                    },
-                    onShowDetails = { song -> detailsSong = song },
-                    accentColor = accentNeonColor,
-                    textWhite = textWhite,
-                    textDim = textDim
-                )
+                        },
+                        onShowDetails = { song -> detailsSong = song },
+                        accentColor = accentNeonColor,
+                        textWhite = textWhite,
+                        textDim = textDim
+                    )
+                }
                 Spacer(modifier = Modifier.height(8.dp))
             }
+            }
+
+        }
+
+        Row(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .height(56.dp)
+                .background(Color(0xFF171A20)),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            PrimaryDestination.entries.forEach { destination ->
+                val selected = primaryDestination == destination
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .selectable(
+                            selected = selected,
+                            onClick = { primaryDestination = destination },
+                            role = Role.Tab
+                        )
+                        .testTag("primary_nav_${destination.name.lowercase()}"),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (useIconBottomNavigation) {
+                        Icon(
+                            imageVector = if (selected) destination.selectedIcon else destination.unselectedIcon,
+                            contentDescription = destination.label,
+                            tint = if (selected) accentNeonColor else textDim,
+                            modifier = Modifier.size(26.dp)
+                        )
+                    } else {
+                        Text(
+                            text = destination.label,
+                            color = if (selected) accentNeonColor else textDim,
+                            fontSize = 14.sp,
+                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+                        )
+                    }
+                }
             }
         }
     }
@@ -547,7 +577,7 @@ fun MusicPlayerScreen(
             }
         }
 
-        if (!showSettings && statusMessageState != StatusMessageState.Idle) {
+        if (primaryDestination != PrimaryDestination.Settings && statusMessageState != StatusMessageState.Idle) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()

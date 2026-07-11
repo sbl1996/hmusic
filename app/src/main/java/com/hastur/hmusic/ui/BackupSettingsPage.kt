@@ -95,6 +95,8 @@ fun AppSettingsPage(
     musicdlStorageState: MusicdlStorageUiState,
     onLoadDownloadStorage: () -> Unit,
     onCleanupDownloadStorage: () -> Unit,
+    useIconBottomNavigation: Boolean,
+    onUseIconBottomNavigationChange: (Boolean) -> Unit,
     accentColor: Color,
     textWhite: Color,
     textDim: Color,
@@ -119,6 +121,46 @@ fun AppSettingsPage(
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.padding(top = 4.dp, bottom = 4.dp)
             )
+
+            SettingsSectionHeader(
+                icon = Icons.Filled.Palette,
+                title = "界面",
+                accentColor = accentColor,
+                textWhite = textWhite
+            )
+
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(20.dp),
+                color = Color(0x13FFFFFF),
+                border = BorderStroke(1.dp, Color(0x1AFFFFFF))
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "底栏样式",
+                        color = textWhite,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        NavigationStyleButton(
+                            text = "纯文字",
+                            selected = !useIconBottomNavigation,
+                            onClick = { onUseIconBottomNavigationChange(false) },
+                            accentColor = accentColor,
+                            modifier = Modifier.weight(1f)
+                        )
+                        NavigationStyleButton(
+                            text = "纯图标",
+                            selected = useIconBottomNavigation,
+                            onClick = { onUseIconBottomNavigationChange(true) },
+                            accentColor = accentColor,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+            }
 
             SettingsSectionHeader(
                 icon = Icons.Filled.Storage,
@@ -342,6 +384,28 @@ fun AppSettingsPage(
         }
     }
 
+}
+
+@Composable
+private fun NavigationStyleButton(
+    text: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    accentColor: Color,
+    modifier: Modifier = Modifier
+) {
+    OutlinedButton(
+        onClick = onClick,
+        modifier = modifier,
+        shape = RoundedCornerShape(12.dp),
+        colors = ButtonDefaults.outlinedButtonColors(
+            containerColor = if (selected) accentColor else Color.Transparent,
+            contentColor = if (selected) Color(0xFF21005D) else accentColor
+        ),
+        border = BorderStroke(1.dp, if (selected) accentColor else Color(0x3DD0BCFF))
+    ) {
+        Text(text = text, fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium)
+    }
 }
 
 @Composable
