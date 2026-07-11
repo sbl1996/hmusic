@@ -294,11 +294,6 @@ fun PlaylistSection(
                         letterSpacing = 0.5.sp
                     )
                 }
-                Icon(
-                    imageVector = if (isExpanded) Icons.Filled.ExpandMore else Icons.Filled.ChevronRight,
-                    contentDescription = null,
-                    tint = accentColor
-                )
             }
 
             AnimatedVisibility(
