@@ -105,6 +105,20 @@ data class MusicdlDownloadResult(
 )
 
 @JsonClass(generateAdapter = true)
+data class MusicdlDownloadStorageResponse(
+    val usedBytes: Long,
+    val fileCount: Int
+)
+
+@JsonClass(generateAdapter = true)
+data class MusicdlDownloadCleanupResponse(
+    val deletedBytes: Long,
+    val deletedFileCount: Int,
+    val deletedTaskCount: Int,
+    val skippedActiveTaskCount: Int
+)
+
+@JsonClass(generateAdapter = true)
 data class MusicdlErrorResponse(
     val detail: Any? = null
 )

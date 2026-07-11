@@ -40,6 +40,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.Locale
 
 enum class LibrarySongStatus {
     LOCAL_ONLY,
@@ -114,6 +115,14 @@ data class LocalScanState(
     val total: Int = 0
 )
 
+data class MusicdlStorageUiState(
+    val isLoading: Boolean = false,
+    val isCleaning: Boolean = false,
+    val usedBytes: Long = 0L,
+    val fileCount: Int = 0,
+    val error: String? = null
+)
+
 @OptIn(ExperimentalCoroutinesApi::class)
 class MusicViewModel(
     private val repository: MusicRepository,
@@ -136,6 +145,9 @@ class MusicViewModel(
 
     private val _localScanState = MutableStateFlow(LocalScanState())
     val localScanState: StateFlow<LocalScanState> = _localScanState.asStateFlow()
+
+    private val _musicdlStorageState = MutableStateFlow(MusicdlStorageUiState())
+    val musicdlStorageState: StateFlow<MusicdlStorageUiState> = _musicdlStorageState.asStateFlow()
 
     val musicdlBaseUrl: StateFlow<String> = musicdlSettingsStore.baseUrlFlow
         .stateIn(
@@ -259,6 +271,73 @@ class MusicViewModel(
         viewModelScope.launch {
             musicdlSettingsStore.saveBaseUrl(baseUrl)
         }
+    }
+
+    fun loadDownloadStorage() {
+        if (_musicdlStorageState.value.isLoading || _musicdlStorageState.value.isCleaning) {
+            return
+        }
+        _musicdlStorageState.update { it.copy(isLoading = true, error = null) }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val storage = musicdlApiClient.getDownloadStorage(musicdlBaseUrl.value)
+                _musicdlStorageState.update {
+                    it.copy(isLoading = false, usedBytes = storage.usedBytes, fileCount = storage.fileCount)
+                }
+            } catch (e: Exception) {
+                _musicdlStorageState.update {
+                    it.copy(isLoading = false, error = e.localizedMessage ?: "获取下载缓存信息失败")
+                }
+            }
+        }
+    }
+
+    fun cleanupDownloadStorage() {
+        if (_musicdlStorageState.value.isCleaning) {
+            return
+        }
+        _musicdlStorageState.update { it.copy(isCleaning = true, error = null) }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val result = musicdlApiClient.cleanupDownloadStorage(musicdlBaseUrl.value)
+                val storage = runCatching {
+                    musicdlApiClient.getDownloadStorage(musicdlBaseUrl.value)
+                }.getOrNull()
+                _musicdlStorageState.update {
+                    it.copy(
+                        isCleaning = false,
+                        usedBytes = storage?.usedBytes ?: 0L,
+                        fileCount = storage?.fileCount ?: 0
+                    )
+                }
+                val activeNote = if (result.skippedActiveTaskCount > 0) {
+                    "（保留 ${result.skippedActiveTaskCount} 个进行中任务）"
+                } else {
+                    ""
+                }
+                _statusMessageState.value = StatusMessageState.Completed(
+                    "已清理 ${result.deletedTaskCount} 个任务、" +
+                        "${result.deletedFileCount} 个文件，释放 ${formatBytes(result.deletedBytes)}$activeNote"
+                )
+            } catch (e: Exception) {
+                _musicdlStorageState.update {
+                    it.copy(isCleaning = false, error = e.localizedMessage ?: "清理下载缓存失败")
+                }
+                _statusMessageState.value = StatusMessageState.Error(e.localizedMessage ?: "清理下载缓存失败")
+            }
+        }
+    }
+
+    private fun formatBytes(bytes: Long): String {
+        if (bytes <= 0L) return "0 B"
+        val units = arrayOf("B", "KB", "MB", "GB", "TB")
+        var value = bytes.toDouble()
+        var unitIndex = 0
+        while (value >= 1024.0 && unitIndex < units.lastIndex) {
+            value /= 1024.0
+            unitIndex++
+        }
+        return String.format(Locale.ROOT, "%.1f %s", value, units[unitIndex])
     }
 
     fun searchMusicdl() {

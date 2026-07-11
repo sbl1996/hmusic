@@ -28,6 +28,8 @@ class MusicdlApiClient(
     private val searchTaskAdapter = moshi.adapter(MusicdlSearchTaskResponse::class.java)
     private val downloadRequestAdapter = moshi.adapter(MusicdlDownloadRequest::class.java)
     private val downloadTaskAdapter = moshi.adapter(MusicdlDownloadTaskResponse::class.java)
+    private val downloadStorageAdapter = moshi.adapter(MusicdlDownloadStorageResponse::class.java)
+    private val downloadCleanupAdapter = moshi.adapter(MusicdlDownloadCleanupResponse::class.java)
 
     fun health(baseUrl: String): MusicdlHealthResponse {
         val request = Request.Builder()
@@ -84,6 +86,22 @@ class MusicdlApiClient(
             .get()
             .build()
         return executeJson(request, downloadTaskAdapter::fromJson)
+    }
+
+    fun getDownloadStorage(baseUrl: String): MusicdlDownloadStorageResponse {
+        val request = Request.Builder()
+            .url(resolveUrl(baseUrl, "downloads/storage"))
+            .get()
+            .build()
+        return executeJson(request, downloadStorageAdapter::fromJson)
+    }
+
+    fun cleanupDownloadStorage(baseUrl: String): MusicdlDownloadCleanupResponse {
+        val request = Request.Builder()
+            .url(resolveUrl(baseUrl, "downloads/storage"))
+            .delete()
+            .build()
+        return executeJson(request, downloadCleanupAdapter::fromJson)
     }
 
     fun <T> downloadFile(

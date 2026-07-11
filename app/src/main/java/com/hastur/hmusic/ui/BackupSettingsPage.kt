@@ -90,7 +90,11 @@ fun AppSettingsPage(
     onShowStatusError: (String) -> Unit,
     hasSongDirectory: Boolean,
     onChooseSongDirectory: () -> Unit,
+    onImportLocalSong: () -> Unit,
     onScanLocalSongs: () -> Unit,
+    musicdlStorageState: MusicdlStorageUiState,
+    onLoadDownloadStorage: () -> Unit,
+    onCleanupDownloadStorage: () -> Unit,
     accentColor: Color,
     textWhite: Color,
     textDim: Color,
@@ -163,6 +167,50 @@ fun AppSettingsPage(
                     TextButton(onClick = onChooseSongDirectory) {
                         Text(if (hasSongDirectory) "更改" else "选择")
                     }
+                }
+            }
+
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(
+                        enabled = hasSongDirectory,
+                        onClick = onImportLocalSong
+                    )
+                    .testTag("import_local_song_button"),
+                shape = RoundedCornerShape(16.dp),
+                color = Color(0x0AFFFFFF),
+                border = BorderStroke(1.dp, Color(0x14FFFFFF))
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 13.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.LibraryMusic,
+                        contentDescription = null,
+                        tint = if (hasSongDirectory) accentColor else textDim,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "导入本地音乐",
+                            color = if (hasSongDirectory) textWhite else textDim,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = if (hasSongDirectory) "从设备中选择音频文件" else "请先选择歌曲存储目录",
+                            color = textDim,
+                            fontSize = 12.sp
+                        )
+                    }
+                    Icon(
+                        imageVector = Icons.Filled.ChevronRight,
+                        contentDescription = null,
+                        tint = textDim
+                    )
                 }
             }
 
@@ -257,6 +305,15 @@ fun AppSettingsPage(
             MusicdlSettingsCard(
                 baseUrl = musicdlBaseUrl,
                 onBaseUrlChange = onMusicdlBaseUrlChange,
+                accentColor = accentColor,
+                textWhite = textWhite,
+                textDim = textDim
+            )
+
+            DownloadStorageCard(
+                state = musicdlStorageState,
+                onLoad = onLoadDownloadStorage,
+                onCleanup = onCleanupDownloadStorage,
                 accentColor = accentColor,
                 textWhite = textWhite,
                 textDim = textDim
@@ -374,4 +431,125 @@ private fun MusicdlSettingsCard(
             )
         }
     }
+}
+
+@Composable
+private fun DownloadStorageCard(
+    state: MusicdlStorageUiState,
+    onLoad: () -> Unit,
+    onCleanup: () -> Unit,
+    accentColor: Color,
+    textWhite: Color,
+    textDim: Color
+) {
+    var showCleanupConfirm by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(Unit) { onLoad() }
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        color = Color(0x0AFFFFFF),
+        border = BorderStroke(1.dp, Color(0x10FFFFFF))
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.CleaningServices,
+                    contentDescription = null,
+                    tint = accentColor,
+                    modifier = Modifier.size(18.dp)
+                )
+                Text(
+                    text = "下载缓存",
+                    color = textWhite,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+
+            val usageText = when {
+                state.isLoading -> "正在统计…"
+                state.error != null -> state.error
+                else -> "${formatStorageBytes(state.usedBytes)} / ${state.fileCount} 个文件"
+            }
+            Text(
+                text = usageText,
+                color = if (state.error != null) textWhite else textDim,
+                fontSize = 13.sp
+            )
+
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                OutlinedButton(
+                    onClick = onLoad,
+                    enabled = !state.isLoading && !state.isCleaning,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("刷新", color = textWhite)
+                }
+                Button(
+                    onClick = { showCleanupConfirm = true },
+                    enabled = !state.isLoading && !state.isCleaning,
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = accentColor,
+                        contentColor = Color(0xFF21005D)
+                    )
+                ) {
+                    if (state.isCleaning) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(15.dp),
+                            strokeWidth = 2.dp,
+                            color = Color(0xFF21005D)
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Filled.CleaningServices,
+                            contentDescription = null,
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Spacer(modifier = Modifier.width(5.dp))
+                        Text("清理", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+    }
+
+    if (showCleanupConfirm) {
+        ConfirmationDialog(
+            title = "清理下载缓存",
+            message = "将删除服务端已完成/失败的下载任务目录，进行中的任务会保留。确定继续吗？",
+            confirmLabel = "清理",
+            dismissLabel = "取消",
+            onConfirm = {
+                showCleanupConfirm = false
+                onCleanup()
+            },
+            onDismiss = { showCleanupConfirm = false }
+        )
+    }
+}
+
+private fun formatStorageBytes(bytes: Long): String {
+    if (bytes <= 0L) return "0 B"
+    val units = arrayOf("B", "KB", "MB", "GB", "TB")
+    var value = bytes.toDouble()
+    var unitIndex = 0
+    while (value >= 1024.0 && unitIndex < units.lastIndex) {
+        value /= 1024.0
+        unitIndex++
+    }
+    return String.format(Locale.ROOT, "%.1f %s", value, units[unitIndex])
 }

@@ -86,6 +86,7 @@ fun MusicPlayerScreen(
     val musicdlSearchState by viewModel.musicdlSearchState.collectAsState()
     val musicdlBaseUrl by viewModel.musicdlBaseUrl.collectAsState()
     val localScanState by viewModel.localScanState.collectAsState()
+    val musicdlStorageState by viewModel.musicdlStorageState.collectAsState()
 
     val currentSong by viewModel.currentSong.collectAsState()
     val isPlaying by viewModel.isPlaying.collectAsState()
@@ -289,26 +290,6 @@ fun MusicPlayerScreen(
                             tint = if (showSearch) accentNeonColor else textWhite
                         )
                     }
-
-                    Spacer(modifier = Modifier.width(8.dp))
-
-                    // Local picker button
-                    IconButton(
-                        onClick = {
-                            runWithSongDirectory { filePickerLauncher.launch("audio/*") }
-                        },
-                        modifier = Modifier
-                            .testTag("add_song_button")
-                            .clip(CircleShape)
-                            .background(Color(0x13FFFFFF))
-                            .border(1.dp, Color(0x1AFFFFFF), CircleShape)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.Add,
-                            contentDescription = "Pick File",
-                            tint = accentNeonColor
-                        )
-                    }
                 }
             }
 
@@ -335,7 +316,13 @@ fun MusicPlayerScreen(
                         pendingStorageAction = null
                         directoryPickerLauncher.launch(null)
                     },
+                    onImportLocalSong = {
+                        runWithSongDirectory { filePickerLauncher.launch("audio/*") }
+                    },
                     onScanLocalSongs = viewModel::scanAndRestoreLocalSongs,
+                    musicdlStorageState = musicdlStorageState,
+                    onLoadDownloadStorage = viewModel::loadDownloadStorage,
+                    onCleanupDownloadStorage = viewModel::cleanupDownloadStorage,
                     accentColor = accentNeonColor,
                     textWhite = textWhite,
                     textDim = textDim,
