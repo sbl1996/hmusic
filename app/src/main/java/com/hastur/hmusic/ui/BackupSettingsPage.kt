@@ -97,6 +97,8 @@ fun AppSettingsPage(
     onCleanupDownloadStorage: () -> Unit,
     useIconBottomNavigation: Boolean,
     onUseIconBottomNavigationChange: (Boolean) -> Unit,
+    showStatusBar: Boolean,
+    onShowStatusBarChange: (Boolean) -> Unit,
     accentColor: Color,
     textWhite: Color,
     textDim: Color,
@@ -149,6 +151,31 @@ fun AppSettingsPage(
                             onClick = { onUseIconBottomNavigationChange(true) },
                             accentColor = accentColor,
                             modifier = Modifier.weight(1f)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "显示状态栏",
+                                color = textWhite,
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "显示时间、电量和网络状态",
+                                color = textDim,
+                                fontSize = 12.sp
+                            )
+                        }
+                        Switch(
+                            checked = showStatusBar,
+                            onCheckedChange = onShowStatusBarChange
                         )
                     }
                 }

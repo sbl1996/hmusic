@@ -1,5 +1,6 @@
 package com.hastur.hmusic.ui
 
+import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.graphics.BitmapFactory
@@ -44,6 +45,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
@@ -59,6 +61,8 @@ import androidx.compose.ui.zIndex
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
 import com.hastur.hmusic.data.BackupProfileEntity
 import com.hastur.hmusic.player.LoopMode
 import java.nio.charset.StandardCharsets
@@ -90,8 +94,10 @@ fun MusicPlayerScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val view = LocalView.current
     val uiPreferencesStore = remember(context) { UiPreferencesStore(context) }
     val useIconBottomNavigation by uiPreferencesStore.useIconBottomNavigation.collectAsState(initial = false)
+    val showStatusBar by uiPreferencesStore.showStatusBar.collectAsState(initial = true)
     val coroutineScope = rememberCoroutineScope()
     val songs by viewModel.allSongs.collectAsState()
     val backupProfiles by viewModel.backupProfiles.collectAsState()
@@ -110,6 +116,18 @@ fun MusicPlayerScreen(
     val loopMode by viewModel.loopMode.collectAsState()
     val playerError by viewModel.playerError.collectAsState()
     val bannerAutoDismissMillis = 3000L
+
+    LaunchedEffect(showStatusBar) {
+        val activity = context as? Activity ?: return@LaunchedEffect
+        WindowCompat.getInsetsController(activity.window, view).apply {
+            isAppearanceLightStatusBars = false
+            if (showStatusBar) {
+                show(WindowInsetsCompat.Type.statusBars())
+            } else {
+                hide(WindowInsetsCompat.Type.statusBars())
+            }
+        }
+    }
 
     var primaryDestination by rememberSaveable { mutableStateOf(PrimaryDestination.Player) }
     var showAddDialog by remember { mutableStateOf(false) }
@@ -262,6 +280,10 @@ fun MusicPlayerScreen(
                     useIconBottomNavigation = useIconBottomNavigation,
                     onUseIconBottomNavigationChange = { enabled ->
                         coroutineScope.launch { uiPreferencesStore.setUseIconBottomNavigation(enabled) }
+                    },
+                    showStatusBar = showStatusBar,
+                    onShowStatusBarChange = { visible ->
+                        coroutineScope.launch { uiPreferencesStore.setShowStatusBar(visible) }
                     },
                     accentColor = accentNeonColor,
                     textWhite = textWhite,

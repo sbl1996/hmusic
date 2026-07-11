@@ -15,13 +15,23 @@ class UiPreferencesStore(context: Context) {
     val useIconBottomNavigation: Flow<Boolean> = appContext.uiPreferencesDataStore.data
         .map { preferences -> preferences[Keys.useIconBottomNavigation] ?: false }
 
+    val showStatusBar: Flow<Boolean> = appContext.uiPreferencesDataStore.data
+        .map { preferences -> preferences[Keys.showStatusBar] ?: true }
+
     suspend fun setUseIconBottomNavigation(enabled: Boolean) {
         appContext.uiPreferencesDataStore.edit { preferences ->
             preferences[Keys.useIconBottomNavigation] = enabled
         }
     }
 
+    suspend fun setShowStatusBar(visible: Boolean) {
+        appContext.uiPreferencesDataStore.edit { preferences ->
+            preferences[Keys.showStatusBar] = visible
+        }
+    }
+
     private object Keys {
         val useIconBottomNavigation = booleanPreferencesKey("use_icon_bottom_navigation")
+        val showStatusBar = booleanPreferencesKey("show_status_bar")
     }
 }
