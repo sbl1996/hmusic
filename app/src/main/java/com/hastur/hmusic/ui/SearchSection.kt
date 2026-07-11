@@ -41,6 +41,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -64,11 +66,19 @@ fun SearchSection(
     textDim: Color,
     modifier: Modifier = Modifier
 ) {
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
+    val triggerSearch = {
+        keyboardController?.hide()
+        focusManager.clearFocus()
+        onSearch()
+    }
+
     Column(
         modifier = modifier
             .fillMaxSize()
             .padding(bottom = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+            verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -81,14 +91,14 @@ fun SearchSection(
                 label = { Text("歌曲 / 歌手") },
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                keyboardActions = KeyboardActions(onSearch = { onSearch() }),
+                keyboardActions = KeyboardActions(onSearch = { triggerSearch() }),
                 colors = searchTextFieldColors(accentColor, textWhite, textDim),
                 modifier = Modifier
                     .weight(1f)
                     .testTag("musicdl_keyword_input")
             )
             IconButton(
-                onClick = { if (!searchState.isSearching) onSearch() },
+                onClick = { if (!searchState.isSearching) triggerSearch() },
                 modifier = Modifier
                     .size(56.dp)
                     .background(Color(0x13FFFFFF), RoundedCornerShape(16.dp))
