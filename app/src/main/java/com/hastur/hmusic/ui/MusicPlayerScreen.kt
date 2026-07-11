@@ -76,13 +76,12 @@ import java.io.File
 
 private enum class PrimaryDestination(
     val label: String,
-    val eyebrow: String,
     val selectedIcon: ImageVector,
     val unselectedIcon: ImageVector
 ) {
-    Player("播放", "LOCAL PLAYBACK", Icons.Filled.LibraryMusic, Icons.Outlined.LibraryMusic),
-    Search("搜索", "DISCOVER MUSIC", Icons.Filled.Search, Icons.Outlined.Search),
-    Settings("设置", "APP SETTINGS", Icons.Filled.Settings, Icons.Outlined.Settings)
+    Player("播放", Icons.Filled.LibraryMusic, Icons.Outlined.LibraryMusic),
+    Search("搜索", Icons.Filled.Search, Icons.Outlined.Search),
+    Settings("设置", Icons.Filled.Settings, Icons.Outlined.Settings)
 }
 
 @Composable
@@ -230,38 +229,6 @@ fun MusicPlayerScreen(
                 .padding(bottom = 56.dp)
                 .padding(horizontal = 16.dp)
         ) {
-            // Brand header. Primary navigation stays in the stable bottom bar.
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Column {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(6.dp)
-                                .clip(CircleShape)
-                                .background(accentNeonColor)
-                        )
-                        Text(
-                            text = primaryDestination.eyebrow,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = accentNeonColor,
-                            fontFamily = FontFamily.Monospace,
-                            letterSpacing = 1.5.sp
-                        )
-                    }
-                }
-
-            }
-
             if (primaryDestination == PrimaryDestination.Settings) {
                 AppSettingsPage(
                     profiles = backupProfiles,
