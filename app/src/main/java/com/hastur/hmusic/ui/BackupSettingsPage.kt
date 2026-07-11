@@ -114,14 +114,6 @@ fun AppSettingsPage(
                 .verticalScroll(scrollState),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Text(
-                text = "设置",
-                color = textWhite,
-                fontSize = 24.sp,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(top = 4.dp, bottom = 4.dp)
-            )
-
             SettingsSectionHeader(
                 icon = Icons.Filled.Palette,
                 title = "界面",
@@ -455,24 +447,6 @@ private fun MusicdlSettingsCard(
                 .padding(14.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.Search,
-                    contentDescription = null,
-                    tint = accentColor,
-                    modifier = Modifier.size(18.dp)
-                )
-                Text(
-                    text = "在线搜索服务",
-                    color = textWhite,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-
             OutlinedTextField(
                 value = baseUrl,
                 onValueChange = onBaseUrlChange,

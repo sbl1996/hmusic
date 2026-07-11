@@ -267,12 +267,6 @@ fun MusicPlayerScreen(
                     }
                 }
 
-                Text(
-                    text = primaryDestination.label,
-                    color = textDim,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium
-                )
             }
 
             if (primaryDestination == PrimaryDestination.Settings) {
