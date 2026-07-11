@@ -239,13 +239,6 @@ fun MusicPlayerScreen(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Column {
-                    Text(
-                        text = "Music",
-                        fontSize = 22.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = textWhite,
-                        letterSpacing = 1.5.sp
-                    )
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(4.dp)
